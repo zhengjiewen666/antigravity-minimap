@@ -723,8 +723,8 @@ async function renderCleanMinimap(convId, prompts) {
             return;
           }
 
-          // 目标未在视口内（被虚拟列表截断）：启动极速事件响应式向上回溯加载
-          const maxRounds = 40;
+          // 目标未在视口内（被虚拟列表截断）：启动受控高速回溯加载（严格限制耗时在数百毫秒内，绝不卡死渲染）
+          const maxRounds = idx === 0 ? 25 : 12;
           for (let round = 0; round < maxRounds; round++) {
             if (window.__minimapJumpId !== currentJumpId) return;
 
