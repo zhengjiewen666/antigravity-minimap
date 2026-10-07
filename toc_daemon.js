@@ -597,10 +597,10 @@ function sendCDP(method, params) {
   });
 }
 
-// 自动保证原生分叉与分支实验特性的常驻开启
+// 自动保证原生分叉与分支实验特性的常驻开启与瞬时激活
 async function ensureForkFlags() {
   const now = Date.now();
-  if (now - lastFlagsChecked < 30000) return;
+  if (now - lastFlagsChecked < 4000) return;
   lastFlagsChecked = now;
 
   await sendCDP('Runtime.evaluate', {
@@ -615,7 +615,8 @@ async function ensureForkFlags() {
           'enable-fork-at-historical-step': true,
           'enable-fork-in-new-worktree': true,
           'enable-conversation-only-revert': true,
-          'enable-split-view': true
+          'enable-split-view': true,
+          'enable-developer-mode': true
         };
         for (const [k, v] of Object.entries(required)) {
           if (flags[k] !== v) {
@@ -623,8 +624,18 @@ async function ensureForkFlags() {
             changed = true;
           }
         }
-        if (changed) {
-          window.localStorage.setItem('jetski.developer.customFlagOverrides', JSON.stringify(flags));
+        const toolbars = document.querySelectorAll('[data-testid="cascade-system-message-toolbar"]');
+        const forkBtns = document.querySelectorAll('[aria-label="Fork Conversation"]');
+        const needsSync = changed || (toolbars.length > 0 && forkBtns.length === 0) || !window.__agFlagsEventDispatched;
+
+        if (needsSync) {
+          const val = JSON.stringify(flags);
+          window.localStorage.setItem('jetski.developer.customFlagOverrides', val);
+          window.dispatchEvent(new StorageEvent('storage', {
+            key: 'jetski.developer.customFlagOverrides',
+            newValue: val
+          }));
+          window.__agFlagsEventDispatched = true;
         }
       } catch(e) {}
     })()`
@@ -711,6 +722,80 @@ async function ensureClientEnvironment() {
       window.__agSyncSidebarBadges();
       if (!window.__agSidebarBadgeTimer) {
         window.__agSidebarBadgeTimer = setInterval(window.__agSyncSidebarBadges, 1000);
+      }
+
+      // 实时自愈分叉特性标记，确保底栏 Fork 按钮始终就绪
+      if (!window.__agEnsureForkFlags) {
+        window.__agEnsureForkFlags = function() {
+          try {
+            const required = {
+              'enable-conversation-forking': true,
+              'enable-fork-at-historical-step': true,
+              'enable-fork-in-new-worktree': true,
+              'enable-conversation-only-revert': true,
+              'enable-split-view': true,
+              'enable-developer-mode': true
+            };
+            const cur = window.localStorage.getItem('jetski.developer.customFlagOverrides');
+            let flags = {};
+            try { flags = JSON.parse(cur) || {}; } catch(e) {}
+            let changed = false;
+            for (const [k, v] of Object.entries(required)) {
+              if (flags[k] !== v) {
+                flags[k] = v;
+                changed = true;
+              }
+            }
+            const toolbars = document.querySelectorAll('[data-testid="cascade-system-message-toolbar"]');
+            const forkBtns = document.querySelectorAll('[aria-label="Fork Conversation"]');
+            const needsSync = changed || (toolbars.length > 0 && forkBtns.length === 0) || !window.__agFlagsEventDispatched;
+            if (needsSync) {
+              const val = JSON.stringify(flags);
+              window.localStorage.setItem('jetski.developer.customFlagOverrides', val);
+              window.dispatchEvent(new StorageEvent('storage', {
+                key: 'jetski.developer.customFlagOverrides',
+                newValue: val
+              }));
+              window.__agFlagsEventDispatched = true;
+            }
+          } catch(e) {}
+        };
+      }
+      window.__agEnsureForkFlags();
+
+      // 全局汉化与增强底部原生分叉按钮与分支弹出选项
+      if (!window.__agEnhanceForkButtons) {
+        window.__agEnhanceForkButtons = function() {
+          const forkBtns = Array.from(document.querySelectorAll('[aria-label="Fork Conversation"]'));
+          forkBtns.forEach(btn => {
+            btn.setAttribute('title', '创建新的分支对话 (从此处分叉)');
+            const tipId = btn.getAttribute('data-tooltip-id');
+            if (tipId) {
+              const tipEl = document.getElementById(tipId);
+              if (tipEl && (tipEl.innerText.includes('Fork Conversation') || tipEl.innerText.includes('Creating Fork'))) {
+                tipEl.innerText = '创建新的分支对话 (从此处分叉)';
+              }
+            }
+          });
+          document.querySelectorAll('[data-testid="fork-target-option"]').forEach(el => {
+            if (el.innerText.includes('current workspace') && !el.dataset.localized) {
+              el.dataset.localized = 'true';
+              el.innerHTML = '<span style="font-weight:600;display:block">在当前工作区创建分支</span><span style="font-size:11px;opacity:0.75;display:block;margin-top:2px">继承当前点全部历史并在本项目继续</span>';
+            } else if (el.innerText.includes('shared workspace') && !el.dataset.localized) {
+              el.dataset.localized = 'true';
+              el.innerHTML = '<span style="font-weight:600;display:block">在独立工作区创建分支</span><span style="font-size:11px;opacity:0.75;display:block;margin-top:2px">在共享/隔离工作区中独立探索</span>';
+            }
+          });
+        };
+      }
+      window.__agEnhanceForkButtons();
+
+      if (!window.__agGlobalForkObserver) {
+        window.__agGlobalForkObserver = new MutationObserver(() => {
+          if (window.__agEnsureForkFlags) window.__agEnsureForkFlags();
+          if (window.__agEnhanceForkButtons) window.__agEnhanceForkButtons();
+        });
+        window.__agGlobalForkObserver.observe(document.body, { childList: true, subtree: true });
       }
     })()
   `;
