@@ -1,7 +1,7 @@
 {
-  "name": "antigravity-minimap",
-  "version": "1.0.0",
-  "description": "Interactive Prompt Minimap & Outline Navigation for Google Antigravity Desktop AI",
+  "name": "antigravity-minimap-and-fork",
+  "version": "1.1.0",
+  "description": "Interactive Prompt Minimap & Gemini Web-Style Conversation Forking for Google Antigravity Desktop AI",
   "main": "toc_daemon.js",
   "scripts": {
     "start": "node toc_daemon.js"
@@ -10,6 +10,8 @@
     "antigravity",
     "google-antigravity",
     "minimap",
+    "conversation-fork",
+    "branch-in-new-chat",
     "table-of-contents",
     "outline",
     "electron",

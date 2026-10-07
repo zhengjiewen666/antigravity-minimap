@@ -1,14 +1,15 @@
-# ⚡ Antigravity Minimap (会话提问目录与侧边小地图)
+# ⚡ Antigravity Minimap & Gemini Fork
 
 <p align="center">
-  <b>为 Google Antigravity 桌面端量身打造的交互式提问导航目录与侧边时间线小地图</b><br>
-  <i>彻底解决长对话翻找提问累、滚动卡顿、历史未加载无法直达的痛点！</i>
+  <b>为 Google Antigravity 桌面端量身打造的提问目录导航、侧边小地图与 Gemini 网页版同款对话分叉插件</b><br>
+  <i>彻底解决长对话翻找提问累、滚动卡顿，并为 Antigravity 带来原生级对话分叉（Branch in new chat）与分支隔离探索体验！</i>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Platform-Windows-blue?style=flat-square&logo=windows" alt="Windows">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D18.0.0-brightgreen?style=flat-square&logo=node.js" alt="Node.js">
   <img src="https://img.shields.io/badge/Antigravity-v2.0-blueviolet?style=flat-square" alt="Antigravity">
+  <img src="https://img.shields.io/badge/Gemini%20Fork-Supported-4ade80?style=flat-square" alt="Gemini Fork">
   <img src="https://img.shields.io/badge/License-MIT-orange?style=flat-square" alt="License">
 </p>
 
@@ -16,30 +17,49 @@
 
 ## 📸 效果预览 (Preview)
 
+### 1. 提问导航目录与侧边小地图 (Prompt Minimap)
 ![Antigravity Chat Minimap Preview](assets/preview.png)
 
-> **视觉效果说明**：
 > - **平时默认状态**：右侧边缘仅收缩为一列精致透明的微型横线刻度轴，完全不占用阅读视线，零干扰；
 > - **鼠标悬停状态**：平滑展开半透明磨砂亚克力卡片，清晰罗列本会话的 **全部历史提问**，当前浏览位置高亮突出；
 > - **点击精准直达**：点击任意提问，画面直接精准对齐居中，并伴随柔和的荧光绿聚光灯脉冲提示。
+
+### 2. Gemini 网页版同款对话分叉 (Branch in new chat)
+![Gemini Web Style Fork Preview](assets/fork_preview.png)
+
+> - **每条回复底部分叉按钮**：在每条模型回复底部的操作栏（复制按钮旁）常驻显示分叉图标 `⑂`；
+> - **右侧目录一键联动分叉**：悬停右侧提问目录中的任意历史提问，均会浮现专属的 `⑂ 分叉` 胶囊按钮，随时随地一键开启分支！
 
 ---
 
 ## 🌟 核心特性 (Key Features)
 
-- 🧭 **全景提问时间线刻度轴**
-  在屏幕右侧实时映射整篇会话的提问密度与位置分布，犹如专业 IDE 的代码 Minimap。
-- 📋 **悬停悬浮目录卡片**
-  鼠标悬停即可查看所有提问的序号与具体文字；支持鼠标在刻度轴或卡片条目上滑动时实时同步对应高亮。
+### 🌿 1. Gemini 网页版同款对话分叉 (Conversation Forking)
+- 🔀 **历史节点自由分叉**
+  与 Gemini 网页版核心体验完全一致！当你想在某个历史回答的基础上尝试不同的追问方向或推导备选方案时，无需重新建立对话并复制背景，直接点击分叉即可！
+- 🧠 **完整继承历史上下文**
+  新分支完整保留并继承分叉点之前的所有 Prompt、AI 回答、系统提示词与状态记忆，之后产生的新对话与原会话**双向隔离、互不干扰**。
+- 🎯 **双重便捷入口**
+  1. **消息工具栏入口**：每条 AI 回复底部时间戳旁直接点击 `⑂` 分叉图标；
+  2. **提问大纲直达入口**：右侧悬浮目录中的每个问题条目均有 `⑂ 分叉` 胶囊按钮，免去长屏滚动的烦琐。
+- 📦 **两种分叉模式按需选择**
+  - **在当前工作区创建分支（100% 对应 Gemini 网页版）**：只分叉会话记忆与思考上下文，共用当前工程目录，适合绝大多数方案研讨与代码编写；
+  - **在独立共享工作区创建分支（代码沙盒模式）**：结合 Git Worktree 机制，在磁盘上开辟独立的代码副本隔离区，适合高破坏性的大规模重构实验。
+
+---
+
+### 🧭 2. 交互式提问导航目录 (Interactive Minimap)
+- ⏱️ **全景提问时间线刻度轴**
+  在屏幕右侧实时映射整篇长会话的提问密度与位置分布，犹如专业 IDE 的代码 Minimap。
 - ⚡ **零等待瞬时直达 (Zero-Waiting Instant Jump)**
-  深度重构了分页加载逻辑：在打开会话后，程序在后台**完全静默地以零画面抖动方式预加载历史对话**。点击任何极其早期的提问均已 100% 挂载就绪，**无需任何等待，点击即秒跳**！
+  深度优化分页加载：打开会话后后台**以零画面抖动方式预加载历史对话**，点击早期历史提问 100% 秒级对齐！
 - 🚀 **智能动态跳转速度（远快近滑）**
   - **大跨度远距离跳转（> 750px）**：采用瞬时直达（Teleport），杜绝上万像素慢速平滑滚动的掉帧与卡顿；
-  - **近距离跳转（<= 750px）**：采用自然平滑滑动，提供优雅舒适的过渡体验。
+  - **近距离跳转（<= 750px）**：采用自然平滑滑动，提供优雅舒适的过渡动效。
 - 🔄 **视口双向实时联动**
-  当您在聊天主窗口中上下翻看对话时，右侧刻度条会自动实时点亮当前正在浏览的提问刻度线（带有 120ms 性能节流，不产生任何布局卡顿）。
-- 🛡️ **彻底阻断输入框焦点回弹 (Anti-Lexical Rubber-Banding)**
-  Antigravity 底层采用 Lexical 编辑器，原本滚动时会因光标出界强行将视口扯回底部。本插件在点击瞬间剥离光标焦点并进行 250ms 位置锚定，彻底解决“跳过去后又弹回底部”的顽疾。
+  在主窗口中上下翻看对话时，右侧刻度条会自动实时点亮当前正在浏览的提问刻度线（带有 100ms 性能节流，不产生任何重排卡顿）。
+- 🛡️ **阻断输入框焦点回弹 (Anti-Lexical Rubber-Banding)**
+  Antigravity 底层采用 Lexical 编辑器，原本滚动时会因光标出界强行将视口扯回底部。本插件在点击瞬间剥离光标焦点并进行多重微调锚定，彻底解决“跳过去后又弹回底部”的痛点。
 - 💡 **醒目柔和的荧光聚焦高亮**
   目标提问居中后，会自动施加 2.8 秒的柔和荧光绿外边框与微光投影，随后平滑淡出，助您一眼看清定位点。
 - 🔕 **开机全自动静默常驻**
@@ -47,12 +67,28 @@
 
 ---
 
-## 🚀 快速上手 (Quick Start)
+## 💡 分叉模式对比：两个选项选哪个？
+
+在点击分叉图标时，弹出的菜单包含两个选项：
+
+| 对比维度 | ① 在当前工作区创建分支 | ② 在独立共享工作区创建分支 |
+| :--- | :--- | :--- |
+| **对话历史** | 完整继承分叉点前的全部上下文 | 完整继承分叉点前的全部上下文 |
+| **磁盘代码文件** | **共用当前文件夹**（无额外副本） | **独立隔离副本**（类似 Git 新分支工作树） |
+| **对应 Gemini 网页版** | **完全一致（日常推荐此项）** | Gemini 网页版无本地文件概念，此为 Antigravity 编程扩展 |
+| **适用场景** | **日常答疑、思考讨论、论文研读、探索不同问法** | **尝试有风险的代码修改、大规模破坏性重构实验** |
+
+> [!TIP]
+> 如果您只是想实现和 **Gemini 网页版一模一样**的讨论分支探索，直接点击**第 1 项【在当前工作区创建分支】**即可！
+
+---
+
+## 🚀 快速安装与使用 (Installation)
 
 ### 前置要求
 - Windows 10 / 11 操作系统
-- 已安装 [Node.js](https://nodejs.org/) (版本 `>= 18.0.0`)
-- 已安装并使用 [Google Antigravity](https://antigravity.google/) 独立桌面版
+- 已安装 [Node.js](https://nodejs.org/) (推荐版本 `>= 18.0.0`)
+- 已安装并使用 [Google Antigravity](https://antigravity.google/) 桌面端
 
 ---
 
@@ -63,23 +99,24 @@
    git clone https://github.com/zhengjiewen666/antigravity-minimap.git
    ```
 2. 进入目录，鼠标双击运行 **`install.bat`**。
-3. 脚本会自动完成以下两步：
-   - 将静默启动项添加到 Windows 开机自启文件夹 (`shell:startup`)；
-   - 立即在后台隐蔽启动守护服务（无任何 CMD 黑框窗口）。
-4. **打开 Antigravity，即可在任意会话右侧看到提问小地图！**
+3. 脚本会自动完成以下配置：
+   - 将守护程序同步至用户配置目录；
+   - 配置 Windows 开机静默自启项 (`shell:startup`)；
+   - 立即在后台隐蔽启动守护服务（无黑框）。
+4. **打开或刷新 Antigravity，即可在任意会话中体验小地图导航与分叉功能！**
 
 ---
 
 ### 方法二：命令行手动运行
 
-如果您不想加入开机启动，只想临时使用：
+如果您不想加入开机自启，只想临时测试使用：
 
 ```bash
 cd antigravity-minimap
 node toc_daemon.js
 ```
 
-保持命令行窗口开启，即可正常使用。
+保持命令行窗口开启即可正常使用。
 
 ---
 
@@ -92,40 +129,25 @@ node toc_daemon.js
 
 ---
 
-## 🔬 技术原理 (How It Works)
+## 🔬 技术原理 (Architecture)
 
 ```mermaid
-flowchart LR
-    A["Windows 后台常驻<br>(toc_daemon.js)"] -->|CDP WebSocket| B["Antigravity 桌面端<br>(Chromium 实例)"]
-    B -->|侦测路径变化| C["识别 Active Conversation ID"]
-    C -->|本地日志读取| D["解析 transcript.jsonl 完整提问"]
-    D -->|动态 DOM 注入| E["渲染右侧小地图 & 目录卡片"]
-    E -->|后台静默点击| F["Preload 加载历史消息（零感）"]
-    E -->|点击提问| G["Blur 焦点 + 瞬时/平滑跳转 + 锚定中心"]
+flowchart TD
+    A["Windows 后台静默守护进程<br>(toc_daemon.js)"] -->|CDP WebSocket 协议| B["Google Antigravity 桌面端<br>(Chromium 实例)"]
+    B -->|动态检测| C["提取当前 Conversation ID"]
+    C -->|读取结构化日志| D["解析 transcript.jsonl"]
+    D -->|精准提炼| E["提取全量提问 Prompt 列表"]
+    E -->|DOM 动态挂载| F["渲染全景 Minimap 刻度轴与卡片"]
+    A -->|注入实验性特性标志| G["激活内核内置 forkConversation RPC"]
+    G -->|增强界面交互| H["消息操作栏汉化分叉按钮 + 目录直达分叉"]
 ```
 
-1. **CDP (Chrome DevTools Protocol) 自动化挂载**：
-   通过读取 Antigravity 运行时的 `DevToolsActivePort` 端口，自动与客户端页面建立 WebSocket 通信，实现轻量级热注入，无需修改或重打包客户端源码（不侵入 `.asar` 文件，客户端升级也不受影响）。
-2. **本地 Transcript 结构化解析**：
-   直接从本地数据目录读取会话日志，实时提取用户所有真实的提问（`USER_INPUT`），即使未翻页也能准确统计提问总数与完整文本。
-3. **DOM 隔离与事件流控制**：
-   浮层与刻度条采用独立的高层级绝对定位；跳转时通过调用 `document.activeElement.blur()` 与 `removeAllRanges()`，优雅隔断了富文本编辑器的选区追踪，实现了绝对平稳的视口锚定。
-
----
-
-## ❓ 常见问题 (FAQ)
-
-#### Q1: 关闭 Antigravity 后，后台守护进程会耗电或占用资源吗？
-> **不会**。当检测到 Antigravity 关闭时，Node.js 守护进程仅每 2 秒休眠轮询一次本地端口文件，CPU 占用率始终为 **0.0%**，内存占用不到 **10MB**，毫无性能感知。
-
-#### Q2: 切换不同会话或者新提问时，目录会自动更新吗？
-> **会自动更新**。服务内置了 1.5 秒的心跳监听，只要会话 URL 发生改变或新发出了提问，右侧小地图会即时同步最新的提问列表。
-
-#### Q3: 为什么有的很早以前的问题点一下能立刻跳过去，而以前看需要手动等很久？
-> 本项目开发了“静默后台预热”机制。在您浏览会话时，后台已经无声无息地按节流节奏把早期的历史批次提前拉取到了 DOM 中，因此当您点击时节点早已就绪，实现 **0ms 秒开秒达**。
+1. **会话解析**：实时监控活动会话路径，直接读取本地持久化数据解析真实提问链；
+2. **内核分叉激活**：通过 CDP 开启 Antigravity 官方受限的 `enable-conversation-forking` 与 `enable-fork-at-historical-step` 实验性门控；
+3. **UI 无侵入注入**：纯 DOM / CSS 级增强与事件委托，零侵入修改 Antigravity 核心文件，软件更新不受破坏。
 
 ---
 
 ## 📄 开源许可证 (License)
 
-本项目采用 [MIT License](LICENSE) 开源协议，欢迎自由使用、修改与分享！
+本项目基于 [MIT License](LICENSE) 开源发布。

@@ -1,9 +1,9 @@
 @echo off
 chcp 65001 >nul
-title Antigravity Minimap 一键安装程序
+title Antigravity Minimap & Gemini Fork 一键安装程序
 
 echo ========================================================
-echo       Google Antigravity 会话小地图与提问目录
+echo   Google Antigravity 提问导航目录与 Gemini 对话分叉增强
 echo                   一键安装与自启配置
 echo ========================================================
 echo.
@@ -31,8 +31,9 @@ wscript.exe "%VBS_TARGET%"
 echo.
 echo ========================================================
 echo [✔] 安装成功！
-echo     Antigravity 会话小地图已常驻后台静默运行。
-echo     只要您打开 Antigravity，右侧就会自动出现提问小地图！
+echo     Antigravity 提问小地图与 Gemini 分叉功能已常驻后台运行。
+echo     只要您打开 Antigravity，右侧就会自动出现提问小地图，
+echo     消息底部及目录中将常驻 Gemini 网页版同款分叉按钮！
 echo ========================================================
 echo.
 pause

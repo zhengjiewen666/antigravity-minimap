@@ -28,6 +28,7 @@ let lastConvId = null;
 let lastPromptsHash = '';
 let ws = null;
 let reconnectTimer = null;
+let lastFlagsChecked = 0;
 
 function getPort() {
   const activePortFile = path.join(process.env.APPDATA, 'Antigravity', 'DevToolsActivePort');
@@ -53,19 +54,18 @@ async function connect() {
     ws = new WebSocket(page.webSocketDebuggerUrl);
 
     ws.onopen = async () => {
-      console.log('Rock-solid Minimap Daemon connected');
+      console.log('Antigravity Enhanced Daemon (Minimap & Fork) connected');
       lastConvId = null;
       lastPromptsHash = '';
+      lastFlagsChecked = 0;
       loopSync();
     };
 
     ws.onclose = () => {
-      ws = null;
       scheduleReconnect();
     };
 
     ws.onerror = () => {
-      ws = null;
       scheduleReconnect();
     };
   } catch (e) {
@@ -83,6 +83,7 @@ function sendCDP(method, params) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return resolve(null);
     const id = Math.floor(Math.random() * 1000000);
     let resolved = false;
+
     const onMsg = (event) => {
       try {
         const msg = JSON.parse(event.data);
@@ -111,10 +112,46 @@ function sendCDP(method, params) {
   });
 }
 
+// 自动保证原生分叉与分支实验特性的常驻开启
+async function ensureForkFlags() {
+  const now = Date.now();
+  if (now - lastFlagsChecked < 30000) return; // 30秒检查一次即可
+  lastFlagsChecked = now;
+
+  await sendCDP('Runtime.evaluate', {
+    expression: `(() => {
+      try {
+        const cur = window.localStorage.getItem('jetski.developer.customFlagOverrides');
+        let flags = {};
+        try { flags = JSON.parse(cur) || {}; } catch(e) {}
+        let changed = false;
+        const required = {
+          'enable-conversation-forking': true,
+          'enable-fork-at-historical-step': true,
+          'enable-fork-in-new-worktree': true,
+          'enable-conversation-only-revert': true,
+          'enable-split-view': true
+        };
+        for (const [k, v] of Object.entries(required)) {
+          if (flags[k] !== v) {
+            flags[k] = v;
+            changed = true;
+          }
+        }
+        if (changed) {
+          window.localStorage.setItem('jetski.developer.customFlagOverrides', JSON.stringify(flags));
+        }
+      } catch(e) {}
+    })()`
+  });
+}
+
 async function loopSync() {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
   try {
+    await ensureForkFlags();
+
     const res = await sendCDP('Runtime.evaluate', {
       expression: '(() => ({ pathname: window.location.pathname, hasRoot: !!document.getElementById("ag-minimap-root") }))()',
       returnByValue: true
@@ -158,11 +195,10 @@ async function loopSync() {
       }
 
       const hash = convId + '_' + JSON.stringify(allPrompts.map(p => p.text));
-      // 只要会话切换、内容变动，或者 DOM 重新加载导致丢失时，立即渲染/重建
       if (hash !== lastPromptsHash || !hasRoot) {
         lastConvId = convId;
         lastPromptsHash = hash;
-        console.log(`[${new Date().toLocaleTimeString()}] Rendered ${allPrompts.length} prompts for conv: ${convId}`);
+        console.log(`[${new Date().toLocaleTimeString()}] Rendered ${allPrompts.length} prompts & fork tools for conv: ${convId}`);
         await renderCleanMinimap(convId, allPrompts);
       }
     } else {
@@ -254,8 +290,8 @@ async function renderCleanMinimap(convId, prompts) {
           right: 32px;
           top: 50%;
           transform: translateY(-50%);
-          width: 330px;
-          max-height: 480px;
+          width: 350px;
+          max-height: 500px;
           background: rgba(24, 26, 32, 0.98);
           backdrop-filter: blur(20px);
           border: 1px solid rgba(255, 255, 255, 0.14);
@@ -294,7 +330,7 @@ async function renderCleanMinimap(convId, prompts) {
 
         .ag-minimap-card-list {
           overflow-y: auto;
-          max-height: 400px;
+          max-height: 420px;
           display: flex;
           flex-direction: column;
           gap: 3px;
@@ -310,7 +346,7 @@ async function renderCleanMinimap(convId, prompts) {
 
         /* 普通行：文字浅、半透明 */
         .ag-minimap-row {
-          padding: 8px 12px;
+          padding: 7px 10px;
           font-size: 12.5px;
           line-height: 1.4;
           border-radius: 8px;
@@ -320,12 +356,12 @@ async function renderCleanMinimap(convId, prompts) {
           text-overflow: ellipsis;
           display: flex;
           align-items: center;
-          gap: 8px;
+          gap: 7px;
           box-sizing: border-box;
           width: 100%;
           transition: all 0.12s ease;
           color: #94a3b8;
-          opacity: 0.65;
+          opacity: 0.7;
           background: transparent;
           border-left: 3px solid transparent;
         }
@@ -334,9 +370,9 @@ async function renderCleanMinimap(convId, prompts) {
         .ag-minimap-row:hover, .ag-minimap-row.active {
           color: #ffffff !important;
           opacity: 1 !important;
-          background: rgba(74, 222, 128, 0.18) !important;
+          background: rgba(74, 222, 128, 0.16) !important;
           border-left: 3px solid #4ade80 !important;
-          padding-left: 14px;
+          padding-left: 12px;
         }
 
         .ag-minimap-row-idx {
@@ -357,6 +393,33 @@ async function renderCleanMinimap(convId, prompts) {
           white-space: nowrap;
           flex-grow: 1;
         }
+
+        /* 灵动分叉小胶囊按钮（对标 Gemini 网页版一键分叉） */
+        .ag-minimap-row-fork {
+          display: none;
+          align-items: center;
+          gap: 3px;
+          padding: 2px 7px;
+          font-size: 11px;
+          font-weight: 500;
+          color: #cbd5e1;
+          background: rgba(255, 255, 255, 0.1);
+          border: 1px solid rgba(255, 255, 255, 0.18);
+          border-radius: 6px;
+          cursor: pointer;
+          transition: all 0.15s ease;
+          flex-shrink: 0;
+        }
+        .ag-minimap-row:hover .ag-minimap-row-fork {
+          display: inline-flex !important;
+        }
+        .ag-minimap-row-fork:hover {
+          color: #ffffff !important;
+          background: #2563eb !important;
+          border-color: #60a5fa !important;
+          box-shadow: 0 0 10px rgba(59, 130, 246, 0.55);
+          transform: scale(1.04);
+        }
       \`;
 
       // 2. 根结构挂载与标识绑定
@@ -371,7 +434,7 @@ async function renderCleanMinimap(convId, prompts) {
       card.id = 'ag-minimap-card';
       card.innerHTML = \`
         <div class="ag-minimap-card-header">
-          <span>本会话提问目录 (点击精准跳转)</span>
+          <span>提问导航与分支管理 (Gemini分叉)</span>
           <span class="ag-minimap-card-badge">\${promptsData.length} 轮提问</span>
         </div>
         <div id="ag-minimap-items" class="ag-minimap-card-list"></div>
@@ -390,7 +453,7 @@ async function renderCleanMinimap(convId, prompts) {
       if (!window.__agRouteWatcher) {
         window.__agRouteWatcher = setInterval(() => {
           const curPath = window.location.pathname;
-          const m = curPath.match(/\\/c\\/([a-f0-9\\-]+)/);
+          const m = curPath.match(/\/c\/([a-f0-9\-]+)/);
           const curConv = m ? m[1] : null;
           const r = document.getElementById('ag-minimap-root');
           if (r) {
@@ -403,7 +466,6 @@ async function renderCleanMinimap(convId, prompts) {
         }, 150);
       }
 
-      // 精准寻找聊天主滚动容器
       function getChatScroller() {
         const anchor = document.querySelector('[data-turn-content]') ||
                        document.querySelector('.md-sticky-message-bleed') ||
@@ -462,7 +524,6 @@ async function renderCleanMinimap(convId, prompts) {
         const rect = node.getBoundingClientRect();
         const distance = Math.abs(rect.top - window.innerHeight / 2);
 
-        // 远距离直接瞬移 (auto) 杜绝长屏幕掉帧卡顿；近距离平滑 (smooth)
         const behavior = distance > 750 ? 'auto' : 'smooth';
         node.scrollIntoView({ behavior, block: 'center' });
         pulseHighlight(node);
@@ -492,6 +553,33 @@ async function renderCleanMinimap(convId, prompts) {
           <span class="ag-minimap-row-text">\${item.text}</span>
         \`;
 
+        // 创建专属的【Gemini 网页版同款分叉按钮】
+        const forkBtn = document.createElement('button');
+        forkBtn.className = 'ag-minimap-row-fork';
+        forkBtn.title = \`创建新的分支对话 (从第 \${idx + 1} 轮分叉)\`;
+        forkBtn.innerHTML = \`
+          <svg viewBox="0 -960 960 960" width="12" height="12" fill="currentColor">
+            <path d="M530-140V-290.77q-18.77-68.62-66-101.81T360.85-425.77q-16.39,0-33.15,1.88t-32.77,4.65l73.39,74l-42.15,42.15L180-449.23L326.15-595.38l42.15,42.15l-73.39,74q14.77-2.77 30.54-4.15t32.92-1.38q49.39,0 93.96,18.69T530-407.54V-704.69l-74,74l-42.15-42.77L560-819.61L706.15-673.46L664-631.31l-74-73.39V-140H530Z"/>
+          </svg>
+          <span>分叉</span>
+        \`;
+        forkBtn.onclick = async (e) => {
+          e.stopPropagation();
+          await jump(e);
+          setTimeout(() => {
+            const toolbars = Array.from(document.querySelectorAll('[data-testid="cascade-system-message-toolbar"]'));
+            const tb = toolbars[idx] || toolbars[toolbars.length - 1];
+            if (tb) {
+              const b = tb.querySelector('[aria-label="Fork Conversation"]');
+              if (b) {
+                b.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+                b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+              }
+            }
+          }, 250);
+        };
+        row.appendChild(forkBtn);
+
         function highlight() {
           document.querySelectorAll('.ag-minimap-row').forEach(r => r.classList.remove('active'));
           document.querySelectorAll('.ag-minimap-tick').forEach(t => t.classList.remove('active'));
@@ -501,12 +589,10 @@ async function renderCleanMinimap(convId, prompts) {
         row.addEventListener('mouseenter', highlight);
         tick.addEventListener('mouseenter', highlight);
 
-        // 核心跳转：仅在用户主动点击时才定位，绝对禁止任何后台自主自动跳转
         async function jump(e) {
           e.stopPropagation();
           window.__minimapIsJumping = true;
 
-          // 阻断底层输入框回弹
           if (document.activeElement && typeof document.activeElement.blur === 'function') {
             document.activeElement.blur();
           }
@@ -517,7 +603,6 @@ async function renderCleanMinimap(convId, prompts) {
 
           const total = promptsData.length;
 
-          // 最底部的最新语句直接滚到底部
           if (idx === total - 1) {
             scroller.scrollTop = scroller.scrollHeight;
             setTimeout(() => {
@@ -550,7 +635,6 @@ async function renderCleanMinimap(convId, prompts) {
             return;
           }
 
-          // 如果还没渲染到 DOM 中（由于尚未加载更早的历史记录），按需触发加载更早消息，直到目标出现
           for (let round = 0; round < 12; round++) {
             scroller.scrollTop = 0;
             const loadBtn = Array.from(document.querySelectorAll('button')).find(b => b.innerText.includes('Load older messages'));
@@ -594,7 +678,7 @@ async function renderCleanMinimap(convId, prompts) {
       if (bar.lastElementChild) bar.lastElementChild.classList.add('active');
       if (listEl.lastElementChild) listEl.lastElementChild.classList.add('active');
 
-      // 用户自行滚动时联动高亮
+      // 用户滚动监听联动高亮
       const scroller = getChatScroller();
       if (scroller && !scroller.__minimapScrollBound) {
         scroller.__minimapScrollBound = true;
@@ -634,6 +718,40 @@ async function renderCleanMinimap(convId, prompts) {
           });
         }, { passive: true });
       }
+
+      // 3. 对标 Gemini 网页版：增强并本地化所有原生消息工具栏的分叉按钮文案与菜单
+      const enhanceNativeForkButtons = () => {
+        const forkBtns = Array.from(document.querySelectorAll('[aria-label="Fork Conversation"]'));
+        forkBtns.forEach(btn => {
+          btn.setAttribute('title', '创建新的分支对话 (从此处分叉)');
+          const tipId = btn.getAttribute('data-tooltip-id');
+          if (tipId) {
+            const tipEl = document.getElementById(tipId);
+            if (tipEl && (tipEl.innerText.includes('Fork Conversation') || tipEl.innerText.includes('Creating Fork'))) {
+              tipEl.innerText = '创建新的分支对话 (从此处分叉)';
+            }
+          }
+        });
+      };
+      enhanceNativeForkButtons();
+
+      if (!window.__forkObserverActive) {
+        window.__forkObserverActive = true;
+        const observer = new MutationObserver(() => {
+          enhanceNativeForkButtons();
+          document.querySelectorAll('[data-testid="fork-target-option"]').forEach(el => {
+            if (el.innerText.includes('current workspace') && !el.dataset.localized) {
+              el.dataset.localized = 'true';
+              el.innerHTML = '<span style="font-weight:600;display:block">在当前工作区创建分支</span><span style="font-size:11px;opacity:0.75;display:block;margin-top:2px">继承当前点全部历史并在本项目继续</span>';
+            } else if (el.innerText.includes('shared workspace') && !el.dataset.localized) {
+              el.dataset.localized = 'true';
+              el.innerHTML = '<span style="font-weight:600;display:block">在独立工作区创建分支</span><span style="font-size:11px;opacity:0.75;display:block;margin-top:2px">在共享/隔离工作区中独立探索</span>';
+            }
+          });
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+      }
+
     })()
   `;
 
