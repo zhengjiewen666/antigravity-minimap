@@ -639,9 +639,9 @@ async function ensureClientEnvironment() {
       if (!style) {
         style = document.createElement('style');
         style.id = 'ag-minimap-style';
+        style.textContent = ${JSON.stringify(CSS_STYLES)};
         document.head.appendChild(style);
       }
-      style.textContent = ${JSON.stringify(CSS_STYLES)};
 
       window.__agForksMap = ${JSON.stringify(cachedForks)};
       window.__agParentMap = ${JSON.stringify(Object.fromEntries(Object.entries(cachedParents).map(([k, v]) => [k, v.forkCount])))};
@@ -710,7 +710,7 @@ async function ensureClientEnvironment() {
 
       window.__agSyncSidebarBadges();
       if (!window.__agSidebarBadgeTimer) {
-        window.__agSidebarBadgeTimer = setInterval(window.__agSyncSidebarBadges, 800);
+        window.__agSidebarBadgeTimer = setInterval(window.__agSyncSidebarBadges, 1000);
       }
     })()
   `;
@@ -723,8 +723,8 @@ async function loopSync() {
   try {
     await ensureForkFlags();
 
-    // 定期或按需扫描全量会话分支关系（每 15 秒扫描一次）
-    if (Date.now() - lastForksScan > 15000) {
+    // 定期或按需扫描全量会话分支关系（每 20 秒扫描一次）
+    if (Date.now() - lastForksScan > 20000) {
       try { scanForks(); } catch(e) {}
     }
 
@@ -842,14 +842,14 @@ async function renderCleanMinimap(convId, prompts, forkInfo, parentInfo) {
       const currentForkInfo = ${JSON.stringify(forkInfo)};
       const currentParentInfo = ${JSON.stringify(parentInfo)};
 
-      // 1. 样式表注入与更新
+      // 1. 样式表注入与更新（确保仅初始化一次，防止每帧重绘闪烁）
       let style = document.getElementById('ag-minimap-style');
       if (!style) {
         style = document.createElement('style');
         style.id = 'ag-minimap-style';
+        style.textContent = ${JSON.stringify(CSS_STYLES)};
         document.head.appendChild(style);
       }
-      style.textContent = ${JSON.stringify(CSS_STYLES)};
 
       // 2. 根结构挂载与标识绑定
       let root = document.getElementById('ag-minimap-root');
@@ -952,6 +952,7 @@ async function renderCleanMinimap(convId, prompts, forkInfo, parentInfo) {
         }, 2800);
       }
 
+      // 精准平稳居中：绝不失控跳动
       function lockAndCenter(node) {
         if (!node) return;
         window.__minimapIsJumping = true;
@@ -960,67 +961,64 @@ async function renderCleanMinimap(convId, prompts, forkInfo, parentInfo) {
           clearTimeout(window.__minimapAnchorTimer);
         }
 
-        const rect = node.getBoundingClientRect();
-        const distance = Math.abs(rect.top - window.innerHeight / 2);
-
-        const behavior = distance > 750 ? 'auto' : 'smooth';
-        node.scrollIntoView({ behavior, block: 'center' });
+        node.scrollIntoView({ behavior: 'auto', block: 'center' });
         pulseHighlight(node);
 
         window.__minimapAnchorTimer = setTimeout(() => {
-          if (node.isConnected) {
-            const r = node.getBoundingClientRect();
-            if (Math.abs(r.top - window.innerHeight / 2) > 120) {
-              node.scrollIntoView({ behavior: 'auto', block: 'center' });
-            }
-          }
           window.__minimapIsJumping = false;
-        }, 250);
+          window.__minimapAnchorTimer = null;
+        }, 300);
       }
 
-      function cleanPromptText(raw) {
-        if (!raw) return '';
-        return raw
+      // 文本实质性规范化清洗
+      function cleanSubstance(text) {
+        if (!text) return '';
+        return text
           .replace(/@\\[.*?\\]/g, ' ')
           .replace(/<[^>]+>/g, ' ')
           .replace(/\\[([^\\]]+)\\]\\([^)]+\\)/g, '$1')
           .replace(/https?:\\/\\/\\S+/g, ' ')
-          .replace(/[#*\\x60~_>\\-+=\\[\\]()|]/g, ' ')
+          .replace(/[\\r\\n\\t]+/g, ' ')
+          .replace(/[#*\\x60~_>\\-+=\\[\\]()|:：,，.。!！?？"“”'‘’\\\\/]/g, ' ')
           .replace(/\\s+/g, ' ')
-          .trim();
+          .trim()
+          .toLowerCase();
       }
 
-      function extractKeywords(cleanText) {
-        const matches = cleanText.match(/[\\u4e00-\\u9fa5]{2,8}|[a-zA-Z0-9_\\-]{3,15}/g) || [];
-        const stopWords = new Set(['https', 'http', 'com', 'org', 'html', 'pdf', '这个', '那个', '什么', '怎么', '为什么', '可以', '一下']);
-        return matches.filter(w => !stopWords.has(w.toLowerCase()));
-      }
-
+      // 高鲁棒性模糊语义匹配器（解决引用前缀、时间戳干扰与部分截断）
       function stepMatches(stepNode, itemText) {
         if (!stepNode || !itemText) return false;
-        const s = (stepNode.innerText || '').replace(/\\s+/g, ' ').toLowerCase();
-        const raw = itemText.replace(/\\s+/g, ' ').toLowerCase();
+        const sNorm = cleanSubstance(stepNode.innerText);
+        const pNorm = cleanSubstance(itemText);
+        if (!sNorm || !pNorm) return false;
 
-        const cleanRaw = raw.replace(/@\\[.*?\\]/g, '').trim();
-        if (cleanRaw.length >= 4 && s.includes(cleanRaw.slice(0, 25))) {
-          return true;
+        // 1. 完全包含或头尾包含
+        if (pNorm.length >= 6 && sNorm.includes(pNorm.slice(0, 30))) return true;
+        if (pNorm.length >= 6 && sNorm.includes(pNorm.slice(-25))) return true;
+
+        // 2. 8 字符滑动窗口切片（精准抵抗中间折叠）
+        if (pNorm.length >= 8) {
+          const maxCheck = Math.min(pNorm.length, 60);
+          for (let offset = 0; offset + 8 <= maxCheck; offset += 6) {
+            const chunk = pNorm.slice(offset, offset + 8);
+            if (chunk.length >= 6 && sNorm.includes(chunk)) {
+              return true;
+            }
+          }
         }
 
-        const clean = cleanPromptText(itemText).toLowerCase();
-        if (clean.length >= 4 && s.includes(clean.slice(0, 20))) {
-          return true;
-        }
+        // 3. 关键词组合命中
+        const words = pNorm.match(/[\\u4e00-\\u9fa5]{2,6}|[a-z0-9_\\-]{3,12}/g) || [];
+        const stopWords = new Set(['这个', '那个', '什么', '怎么', '为什么', '可以', '一下', '还是', '不是', '然后', '就是']);
+        const validWords = words.filter(w => !stopWords.has(w));
+        if (validWords.length === 0) return false;
 
-        const keywords = extractKeywords(clean);
-        if (keywords.length === 0) return false;
-
-        const testWords = keywords.slice(0, 6);
         let hits = 0;
-        for (const w of testWords) {
-          if (s.includes(w.toLowerCase())) hits++;
+        const testCount = Math.min(6, validWords.length);
+        for (let i = 0; i < testCount; i++) {
+          if (sNorm.includes(validWords[i])) hits++;
         }
-        const minRequired = Math.min(2, testWords.length);
-        return hits >= minRequired && hits > 0;
+        return hits >= Math.min(2, testCount) && hits > 0;
       }
 
       function getLoadOlderButton() {
@@ -1032,6 +1030,32 @@ async function renderCleanMinimap(convId, prompts, forkInfo, parentInfo) {
         const text = (btn.innerText || '').trim();
         if (text.startsWith('No more') || text.includes('No more')) return null;
         return btn;
+      }
+
+      function findTarget(targetIdx) {
+        const item = promptsData[targetIdx];
+        if (!item) return null;
+        const steps = Array.from(document.querySelectorAll('[data-testid="user-input-step"]'));
+        if (!steps.length) return null;
+
+        // 倒序匹配以优先命中最近的实例
+        for (let i = steps.length - 1; i >= 0; i--) {
+          if (stepMatches(steps[i], item.text)) {
+            return steps[i];
+          }
+        }
+
+        // 明确点第 1 轮且顶部完全加载完毕
+        if (targetIdx === 0 && !getLoadOlderButton() && steps.length > 0) {
+          return steps[0];
+        }
+
+        // 最后一轮
+        if (targetIdx === promptsData.length - 1 && steps.length > 0) {
+          return steps[steps.length - 1];
+        }
+
+        return null;
       }
 
       promptsData.forEach((item, idx) => {
@@ -1073,7 +1097,6 @@ async function renderCleanMinimap(convId, prompts, forkInfo, parentInfo) {
         forkBtn.onclick = async (e) => {
           e.stopPropagation();
 
-          // 记录待定分支信息，供新会话瞬间打上分支标记
           try {
             window.localStorage.setItem('ag_pending_fork', JSON.stringify({
               fromConvId: currentConvId,
@@ -1107,36 +1130,11 @@ async function renderCleanMinimap(convId, prompts, forkInfo, parentInfo) {
         row.addEventListener('mouseenter', highlight);
         tick.addEventListener('mouseenter', highlight);
 
-        function findTarget() {
-          const steps = Array.from(document.querySelectorAll('[data-testid="user-input-step"]'));
-          if (!steps.length) return null;
-
-          for (let i = steps.length - 1; i >= 0; i--) {
-            if (stepMatches(steps[i], item.text)) {
-              return steps[i];
-            }
-          }
-
-          // 仅当所有历史消息已彻底加载完毕时，第1轮提问才对应最顶部的步骤
-          if (idx === 0 && !getLoadOlderButton() && steps.length > 0) {
-            return steps[0];
-          }
-
-          if (idx === promptsData.length - 1 && steps.length > 0) {
-            return steps[steps.length - 1];
-          }
-
-          return null;
-        }
-
         async function jump(e) {
           e.stopPropagation();
+          const currentJumpId = Date.now();
+          window.__minimapJumpId = currentJumpId;
           window.__minimapIsJumping = true;
-
-          if (document.activeElement && typeof document.activeElement.blur === 'function') {
-            document.activeElement.blur();
-          }
-          try { window.getSelection()?.removeAllRanges(); } catch (err) {}
 
           const scroller = getChatScroller();
           if (!scroller) {
@@ -1145,77 +1143,107 @@ async function renderCleanMinimap(convId, prompts, forkInfo, parentInfo) {
           }
 
           const total = promptsData.length;
-          const currentJumpId = Date.now();
-          window.__minimapJumpId = currentJumpId;
 
-          // 视觉状态：立即显示正在定位
+          // 视觉状态：显示当前正在定位的目标行
           document.querySelectorAll('.ag-minimap-row').forEach(r => r.classList.remove('loading'));
           row.classList.add('loading');
 
-          if (idx === total - 1) {
-            scroller.scrollTop = scroller.scrollHeight;
-            setTimeout(() => {
+          try {
+            // Case 1: 最后一轮提问直接滑到底部
+            if (idx === total - 1) {
+              scroller.scrollTop = scroller.scrollHeight;
+              await new Promise(r => setTimeout(r, 60));
               const steps = Array.from(document.querySelectorAll('[data-testid="user-input-step"]'));
-              row.classList.remove('loading');
               if (steps.length > 0) {
                 lockAndCenter(steps[steps.length - 1]);
-              } else {
-                window.__minimapIsJumping = false;
               }
-            }, 60);
-            return;
-          }
-
-          let targetNode = findTarget();
-          if (targetNode) {
-            row.classList.remove('loading');
-            lockAndCenter(targetNode);
-            return;
-          }
-
-          // 目标未在当前视口内：启动受控快速回溯加载
-          const maxRounds = idx === 0 ? 95 : 80;
-          for (let round = 0; round < maxRounds; round++) {
-            if (window.__minimapJumpId !== currentJumpId) return;
-
-            const btn = getLoadOlderButton();
-            if (!btn) break;
-
-            const oldLabel = btn.getAttribute('aria-label');
-            btn.click();
-
-            // 极速轮询监听 DOM 加载更新（平均仅 15-25ms）
-            let changed = false;
-            for (let w = 0; w < 20; w++) {
-              await new Promise(res => setTimeout(res, 12));
-              if (window.__minimapJumpId !== currentJumpId) return;
-              const curBtn = getLoadOlderButton();
-              if (!curBtn || curBtn.getAttribute('aria-label') !== oldLabel) {
-                changed = true;
-                break;
-              }
+              return;
             }
-            if (!changed) break;
 
-            targetNode = findTarget();
+            // Case 2: 目标已经在当前 DOM 中，直接居中定位（0 延迟！）
+            let targetNode = findTarget(idx);
             if (targetNode) {
-              row.classList.remove('loading');
               lockAndCenter(targetNode);
               return;
             }
-          }
 
-          await new Promise(res => setTimeout(res, 30));
-          if (window.__minimapJumpId !== currentJumpId) return;
+            // Case 3: 目标在未渲染的上方历史中，需要拉取更早消息
+            // 严禁失控狂拉：受控加载，且每次加载保持滚动锚定，绝不机械滚顶！
+            const maxRounds = idx === 0 ? 50 : 25;
 
-          targetNode = findTarget();
-          row.classList.remove('loading');
+            for (let round = 0; round < maxRounds; round++) {
+              if (window.__minimapJumpId !== currentJumpId) return;
 
-          if (targetNode) {
-            lockAndCenter(targetNode);
-          } else {
-            // 严禁误匹配错误节点或跳至顶部：未找到时优雅停止
-            window.__minimapIsJumping = false;
+              const btn = getLoadOlderButton();
+              if (!btn) break;
+
+              const oldLabel = btn.getAttribute('aria-label');
+              const prevScrollHeight = scroller.scrollHeight;
+              const prevScrollTop = scroller.scrollTop;
+
+              // 派发点击加载更早批次
+              btn.click();
+
+              // 极速等待 DOM 变更
+              let changed = false;
+              for (let w = 0; w < 16; w++) {
+                await new Promise(res => setTimeout(res, 12));
+                if (window.__minimapJumpId !== currentJumpId) return;
+                const curBtn = getLoadOlderButton();
+                if (!curBtn || curBtn.getAttribute('aria-label') !== oldLabel) {
+                  changed = true;
+                  break;
+                }
+              }
+              if (!changed) break;
+
+              // 【核心防划顶机制：保持滚动锚定】
+              // 新消息是插在顶部的，scrollHeight 会增加；
+              // 必须补偿 scrollTop 差值，防止视口被机械拖拽到最上方！
+              // 仅当用户明确点击的是第 1 轮提问时，才允许向顶部靠拢
+              if (idx !== 0) {
+                const deltaHeight = scroller.scrollHeight - prevScrollHeight;
+                if (deltaHeight > 0) {
+                  scroller.scrollTop = prevScrollTop + deltaHeight;
+                }
+              }
+
+              // 每次加载完成后立即检查目标是否已渲染出现
+              targetNode = findTarget(idx);
+              if (targetNode) {
+                lockAndCenter(targetNode);
+                return;
+              }
+            }
+
+            // 若依然未找到严格匹配节点，尝试邻近查找最近已加载的提问，绝不跳到顶部！
+            if (window.__minimapJumpId !== currentJumpId) return;
+            targetNode = findTarget(idx);
+            if (targetNode) {
+              lockAndCenter(targetNode);
+            } else if (idx === 0 && !getLoadOlderButton()) {
+              const steps = Array.from(document.querySelectorAll('[data-testid="user-input-step"]'));
+              if (steps.length > 0) lockAndCenter(steps[0]);
+            } else {
+              // 找不到时在邻近范围内寻找最接近的目标节点
+              for (let offset = 1; offset <= 5; offset++) {
+                if (idx + offset < total) {
+                  const near = findTarget(idx + offset);
+                  if (near) { lockAndCenter(near); return; }
+                }
+                if (idx - offset >= 0) {
+                  const near = findTarget(idx - offset);
+                  if (near) { lockAndCenter(near); return; }
+                }
+              }
+            }
+          } finally {
+            if (window.__minimapJumpId === currentJumpId) {
+              row.classList.remove('loading');
+              setTimeout(() => {
+                window.__minimapIsJumping = false;
+              }, 300);
+            }
           }
         }
 
@@ -1229,7 +1257,7 @@ async function renderCleanMinimap(convId, prompts, forkInfo, parentInfo) {
       if (bar.lastElementChild) bar.lastElementChild.classList.add('active');
       if (listEl.lastElementChild) listEl.lastElementChild.classList.add('active');
 
-      // 用户滚动监听联动高亮
+      // 用户滚动监听联动高亮（严格基于语义匹配当前顶端步骤，杜绝 DOM 子集索引错位）
       const scroller = getChatScroller();
       if (scroller && !scroller.__minimapScrollBound) {
         scroller.__minimapScrollBound = true;
