@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const net = require('net');
+const http = require('http');
 
 // 静默守护模式下，安全处理断开的管道输出，防止无终端窗口时抛出 EPIPE 崩溃
 if (process.stdout) process.stdout.on('error', () => {});
@@ -11,8 +12,6 @@ console.log = (...args) => {
     if (process.stdout && process.stdout.writable) origLog(...args);
   } catch (e) {}
 };
-
-const http = require('http');
 
 const logFile = path.join(process.env.USERPROFILE, '.gemini', 'antigravity', 'daemon.log');
 function log(...args) {
@@ -25,13 +24,16 @@ function log(...args) {
   } catch (e) {}
 }
 
-if (process.stdout) process.stdout.on('error', () => {});
-if (process.stderr) process.stderr.on('error', () => {});
-
 process.on('uncaughtException', (err) => { log('uncaughtException:', err.message); });
 process.on('unhandledRejection', (reason) => { log('unhandledRejection:', String(reason)); });
 
-// HTTP 单实例锁与状态服务
+let lastConvId = null;
+let lastPromptsHash = '';
+let ws = null;
+let reconnectTimer = null;
+let lastFlagsChecked = 0;
+
+// HTTP 单实例锁与健康状态服务 (独占 48899 端口)
 const lockServer = http.createServer((req, res) => {
   if (req.url === '/status') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -54,11 +56,192 @@ lockServer.once('error', (err) => {
 });
 lockServer.listen(48899, '127.0.0.1');
 
-let lastConvId = null;
-let lastPromptsHash = '';
-let ws = null;
-let reconnectTimer = null;
-let lastFlagsChecked = 0;
+const CSS_STYLES = `
+#ag-minimap-root {
+  position: fixed;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 999999;
+  user-select: none;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+/* 平时右侧小横线刻度条 */
+#ag-minimap-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+  padding: 8px 5px;
+  background: rgba(20, 22, 26, 0.4);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+#ag-minimap-root:hover #ag-minimap-bar {
+  background: rgba(20, 22, 26, 0.85);
+  border-color: rgba(255, 255, 255, 0.16);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.ag-minimap-tick {
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.35);
+  transition: all 0.15s ease;
+}
+.ag-minimap-tick.active, .ag-minimap-tick:hover {
+  width: 22px;
+  height: 3.5px;
+  background: #4ade80 !important;
+  box-shadow: 0 0 8px rgba(74, 222, 128, 0.7);
+}
+
+/* 鼠标没放上去时：绝对隐藏大卡片，禁止显示任何文字 */
+#ag-minimap-card {
+  display: none !important;
+  position: absolute;
+  right: 32px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 350px;
+  max-height: 500px;
+  background: rgba(24, 26, 32, 0.98);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 16px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65);
+  padding: 12px 10px;
+  box-sizing: border-box;
+}
+
+/* 鼠标放上去时：整洁的大卡片展开 */
+#ag-minimap-root:hover #ag-minimap-card {
+  display: flex !important;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ag-minimap-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 8px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  margin-bottom: 4px;
+  font-size: 11px;
+  color: #94a3b8;
+  font-weight: 500;
+}
+.ag-minimap-card-badge {
+  background: rgba(74, 222, 128, 0.15);
+  color: #4ade80;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.ag-minimap-card-list {
+  overflow-y: auto;
+  max-height: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-right: 2px;
+}
+.ag-minimap-card-list::-webkit-scrollbar {
+  width: 5px;
+}
+.ag-minimap-card-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+}
+
+/* 普通行：文字浅、半透明 */
+.ag-minimap-row {
+  padding: 7px 10px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  box-sizing: border-box;
+  width: 100%;
+  transition: all 0.12s ease;
+  color: #94a3b8;
+  opacity: 0.7;
+  background: transparent;
+  border-left: 3px solid transparent;
+}
+
+/* 选中行/当前悬停行：颜色深、加重底色、纯白明亮高亮 */
+.ag-minimap-row:hover, .ag-minimap-row.active {
+  color: #ffffff !important;
+  opacity: 1 !important;
+  background: rgba(74, 222, 128, 0.16) !important;
+  border-left: 3px solid #4ade80 !important;
+  padding-left: 12px;
+}
+
+.ag-minimap-row-idx {
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #64748b;
+  min-width: 18px;
+  flex-shrink: 0;
+}
+.ag-minimap-row:hover .ag-minimap-row-idx, .ag-minimap-row.active .ag-minimap-row-idx {
+  color: #4ade80;
+  font-weight: 600;
+}
+
+.ag-minimap-row-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-grow: 1;
+}
+
+/* 灵动分叉小胶囊按钮（对标 Gemini 网页版一键分叉） */
+.ag-minimap-row-fork {
+  display: none;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #cbd5e1;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+.ag-minimap-row:hover .ag-minimap-row-fork {
+  display: inline-flex !important;
+}
+.ag-minimap-row-fork:hover {
+  color: #ffffff !important;
+  background: #2563eb !important;
+  border-color: #60a5fa !important;
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.55);
+  transform: scale(1.04);
+}
+`;
+
+const FORK_SVG = `<svg viewBox="0 -960 960 960" width="12" height="12" fill="currentColor"><path d="M530-140V-290.77q-18.77-68.62-66-101.81T360.85-425.77q-16.39,0-33.15,1.88t-32.77,4.65l73.39,74l-42.15,42.15L180-449.23L326.15-595.38l42.15,42.15l-73.39,74q14.77-2.77 30.54-4.15t32.92-1.38q49.39,0 93.96,18.69T530-407.54V-704.69l-74,74l-42.15-42.77L560-819.61L706.15-673.46L664-631.31l-74-73.39V-140H530Z"/></svg> <span>分叉</span>`;
 
 function getPort() {
   const activePortFile = path.join(process.env.APPDATA, 'Antigravity', 'DevToolsActivePort');
@@ -192,8 +375,7 @@ async function loopSync() {
     const pathname = info.pathname || '';
     const hasRoot = !!info.hasRoot;
     const datasetConv = info.datasetConv || null;
-    const m = pathname.match(/\/c\/([a-f0-9\-]+)/);
-    const convId = m ? m[1] : null;
+    const convId = (pathname.split('/c/')[1] || '').split('?')[0] || null;
 
     if (convId) {
       const transcriptPath = path.join(
@@ -270,190 +452,7 @@ async function renderCleanMinimap(convId, prompts) {
         style.id = 'ag-minimap-style';
         document.head.appendChild(style);
       }
-      style.textContent = \`
-        #ag-minimap-root {
-          position: fixed;
-          right: 12px;
-          top: 50%;
-          transform: translateY(-50%);
-          z-index: 999999;
-          user-select: none;
-          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
-        }
-
-        /* 平时右侧小横线刻度条 */
-        #ag-minimap-bar {
-          display: flex;
-          flex-direction: column;
-          align-items: flex-end;
-          gap: 5px;
-          padding: 8px 5px;
-          background: rgba(20, 22, 26, 0.4);
-          backdrop-filter: blur(10px);
-          border: 1px solid rgba(255, 255, 255, 0.08);
-          border-radius: 12px;
-          box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
-          cursor: pointer;
-          transition: all 0.2s ease;
-        }
-        #ag-minimap-root:hover #ag-minimap-bar {
-          background: rgba(20, 22, 26, 0.85);
-          border-color: rgba(255, 255, 255, 0.16);
-          box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-        }
-
-        .ag-minimap-tick {
-          width: 14px;
-          height: 3px;
-          border-radius: 2px;
-          background: rgba(255, 255, 255, 0.35);
-          transition: all 0.15s ease;
-        }
-        .ag-minimap-tick.active, .ag-minimap-tick:hover {
-          width: 22px;
-          height: 3.5px;
-          background: #4ade80 !important;
-          box-shadow: 0 0 8px rgba(74, 222, 128, 0.7);
-        }
-
-        /* 鼠标没放上去时：绝对隐藏大卡片，禁止显示任何文字 */
-        #ag-minimap-card {
-          display: none !important;
-          position: absolute;
-          right: 32px;
-          top: 50%;
-          transform: translateY(-50%);
-          width: 350px;
-          max-height: 500px;
-          background: rgba(24, 26, 32, 0.98);
-          backdrop-filter: blur(20px);
-          border: 1px solid rgba(255, 255, 255, 0.14);
-          border-radius: 16px;
-          box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65);
-          padding: 12px 10px;
-          box-sizing: border-box;
-        }
-
-        /* 鼠标放上去时：整洁的大卡片展开 */
-        #ag-minimap-root:hover #ag-minimap-card {
-          display: flex !important;
-          flex-direction: column;
-          gap: 4px;
-        }
-
-        .ag-minimap-card-header {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          padding: 2px 8px 8px;
-          border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-          margin-bottom: 4px;
-          font-size: 11px;
-          color: #94a3b8;
-          font-weight: 500;
-        }
-        .ag-minimap-card-badge {
-          background: rgba(74, 222, 128, 0.15);
-          color: #4ade80;
-          padding: 1px 7px;
-          border-radius: 10px;
-          font-size: 10px;
-          font-weight: 600;
-        }
-
-        .ag-minimap-card-list {
-          overflow-y: auto;
-          max-height: 420px;
-          display: flex;
-          flex-direction: column;
-          gap: 3px;
-          padding-right: 2px;
-        }
-        .ag-minimap-card-list::-webkit-scrollbar {
-          width: 5px;
-        }
-        .ag-minimap-card-list::-webkit-scrollbar-thumb {
-          background: rgba(255, 255, 255, 0.2);
-          border-radius: 3px;
-        }
-
-        /* 普通行：文字浅、半透明 */
-        .ag-minimap-row {
-          padding: 7px 10px;
-          font-size: 12.5px;
-          line-height: 1.4;
-          border-radius: 8px;
-          cursor: pointer;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          display: flex;
-          align-items: center;
-          gap: 7px;
-          box-sizing: border-box;
-          width: 100%;
-          transition: all 0.12s ease;
-          color: #94a3b8;
-          opacity: 0.7;
-          background: transparent;
-          border-left: 3px solid transparent;
-        }
-
-        /* 选中行/当前悬停行：颜色深、加重底色、纯白明亮高亮 */
-        .ag-minimap-row:hover, .ag-minimap-row.active {
-          color: #ffffff !important;
-          opacity: 1 !important;
-          background: rgba(74, 222, 128, 0.16) !important;
-          border-left: 3px solid #4ade80 !important;
-          padding-left: 12px;
-        }
-
-        .ag-minimap-row-idx {
-          font-size: 11px;
-          font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-          color: #64748b;
-          min-width: 18px;
-          flex-shrink: 0;
-        }
-        .ag-minimap-row:hover .ag-minimap-row-idx, .ag-minimap-row.active .ag-minimap-row-idx {
-          color: #4ade80;
-          font-weight: 600;
-        }
-
-        .ag-minimap-row-text {
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-          flex-grow: 1;
-        }
-
-        /* 灵动分叉小胶囊按钮（对标 Gemini 网页版一键分叉） */
-        .ag-minimap-row-fork {
-          display: none;
-          align-items: center;
-          gap: 3px;
-          padding: 2px 7px;
-          font-size: 11px;
-          font-weight: 500;
-          color: #cbd5e1;
-          background: rgba(255, 255, 255, 0.1);
-          border: 1px solid rgba(255, 255, 255, 0.18);
-          border-radius: 6px;
-          cursor: pointer;
-          transition: all 0.15s ease;
-          flex-shrink: 0;
-        }
-        .ag-minimap-row:hover .ag-minimap-row-fork {
-          display: inline-flex !important;
-        }
-        .ag-minimap-row-fork:hover {
-          color: #ffffff !important;
-          background: #2563eb !important;
-          border-color: #60a5fa !important;
-          box-shadow: 0 0 10px rgba(59, 130, 246, 0.55);
-          transform: scale(1.04);
-        }
-      \`;
+      style.textContent = ${JSON.stringify(CSS_STYLES)};
 
       // 2. 根结构挂载与标识绑定
       let root = document.getElementById('ag-minimap-root');
@@ -465,13 +464,7 @@ async function renderCleanMinimap(convId, prompts) {
 
       const card = document.createElement('div');
       card.id = 'ag-minimap-card';
-      card.innerHTML = \`
-        <div class="ag-minimap-card-header">
-          <span>提问导航与分支管理 (Gemini分叉)</span>
-          <span class="ag-minimap-card-badge">\${promptsData.length} 轮提问</span>
-        </div>
-        <div id="ag-minimap-items" class="ag-minimap-card-list"></div>
-      \`;
+      card.innerHTML = '<div class="ag-minimap-card-header"><span>提问导航与分支管理 (Gemini分叉)</span><span class="ag-minimap-card-badge">' + promptsData.length + ' 轮提问</span></div><div id="ag-minimap-items" class="ag-minimap-card-list"></div>';
 
       const bar = document.createElement('div');
       bar.id = 'ag-minimap-bar';
@@ -486,8 +479,7 @@ async function renderCleanMinimap(convId, prompts) {
       if (!window.__agRouteWatcher) {
         window.__agRouteWatcher = setInterval(() => {
           const curPath = window.location.pathname;
-          const m = curPath.match(/\/c\/([a-f0-9\-]+)/);
-          const curConv = m ? m[1] : null;
+          const curConv = (curPath.split('/c/')[1] || '').split('?')[0] || null;
           const r = document.getElementById('ag-minimap-root');
           if (r) {
             if (!curConv || r.dataset.convId !== curConv) {
@@ -581,21 +573,23 @@ async function renderCleanMinimap(convId, prompts) {
         row.className = 'ag-minimap-row';
         row.setAttribute('data-idx', idx);
         row.title = item.text;
-        row.innerHTML = \`
-          <span class="ag-minimap-row-idx">#\${idx + 1}</span>
-          <span class="ag-minimap-row-text">\${item.text}</span>
-        \`;
+
+        const idxSpan = document.createElement('span');
+        idxSpan.className = 'ag-minimap-row-idx';
+        idxSpan.textContent = '#' + (idx + 1);
+
+        const textSpan = document.createElement('span');
+        textSpan.className = 'ag-minimap-row-text';
+        textSpan.textContent = item.text;
+
+        row.appendChild(idxSpan);
+        row.appendChild(textSpan);
 
         // 创建专属的【Gemini 网页版同款分叉按钮】
         const forkBtn = document.createElement('button');
         forkBtn.className = 'ag-minimap-row-fork';
-        forkBtn.title = \`创建新的分支对话 (从第 \${idx + 1} 轮分叉)\`;
-        forkBtn.innerHTML = \`
-          <svg viewBox="0 -960 960 960" width="12" height="12" fill="currentColor">
-            <path d="M530-140V-290.77q-18.77-68.62-66-101.81T360.85-425.77q-16.39,0-33.15,1.88t-32.77,4.65l73.39,74l-42.15,42.15L180-449.23L326.15-595.38l42.15,42.15l-73.39,74q14.77-2.77 30.54-4.15t32.92-1.38q49.39,0 93.96,18.69T530-407.54V-704.69l-74,74l-42.15-42.77L560-819.61L706.15-673.46L664-631.31l-74-73.39V-140H530Z"/>
-          </svg>
-          <span>分叉</span>
-        \`;
+        forkBtn.title = '创建新的分支对话 (从第 ' + (idx + 1) + ' 轮分叉)';
+        forkBtn.innerHTML = ${JSON.stringify(FORK_SVG)};
         forkBtn.onclick = async (e) => {
           e.stopPropagation();
           await jump(e);
@@ -788,7 +782,10 @@ async function renderCleanMinimap(convId, prompts) {
     })()
   `;
 
-  await sendCDP('Runtime.evaluate', { expression: code });
+  const evalRes = await sendCDP('Runtime.evaluate', { expression: code, returnByValue: true });
+  if (evalRes && evalRes.exceptionDetails) {
+    log(`Render error for conv ${convId}:`, JSON.stringify(evalRes.exceptionDetails));
+  }
 }
 
 connect();
