@@ -2,7 +2,20 @@ const fs = require('fs');
 const path = require('path');
 const net = require('net');
 
-// 单实例锁，防止多开
+// 静默守护模式下，安全处理断开的管道输出，防止无终端窗口时抛出 EPIPE 崩溃
+if (process.stdout) process.stdout.on('error', () => {});
+if (process.stderr) process.stderr.on('error', () => {});
+const origLog = console.log;
+console.log = (...args) => {
+  try {
+    if (process.stdout && process.stdout.writable) origLog(...args);
+  } catch (e) {}
+};
+
+process.on('uncaughtException', (err) => {});
+process.on('unhandledRejection', (reason) => {});
+
+// 单实例锁，防止多开（占用 48899 端口）
 const lockServer = net.createServer();
 lockServer.once('error', (err) => {
   if (err.code === 'EADDRINUSE') {
@@ -47,10 +60,12 @@ async function connect() {
     };
 
     ws.onclose = () => {
+      ws = null;
       scheduleReconnect();
     };
 
     ws.onerror = () => {
+      ws = null;
       scheduleReconnect();
     };
   } catch (e) {
@@ -64,23 +79,34 @@ function scheduleReconnect() {
 }
 
 function sendCDP(method, params) {
-  return new Promise((resolve, reject) => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return reject(new Error('WS not open'));
+  return new Promise((resolve) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return resolve(null);
     const id = Math.floor(Math.random() * 1000000);
+    let resolved = false;
     const onMsg = (event) => {
       try {
         const msg = JSON.parse(event.data);
         if (msg.id === id) {
+          resolved = true;
           ws.removeEventListener('message', onMsg);
           resolve(msg.result);
         }
       } catch (e) {}
     };
     ws.addEventListener('message', onMsg);
-    ws.send(JSON.stringify({ id, method, params }));
-    setTimeout(() => {
+    try {
+      ws.send(JSON.stringify({ id, method, params }));
+    } catch (e) {
+      resolved = true;
       ws.removeEventListener('message', onMsg);
-      reject(new Error('Timeout'));
+      return resolve(null);
+    }
+    setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        try { ws.removeEventListener('message', onMsg); } catch(e) {}
+        resolve(null);
+      }
     }, 4000);
   });
 }
@@ -90,10 +116,12 @@ async function loopSync() {
 
   try {
     const res = await sendCDP('Runtime.evaluate', {
-      expression: 'window.location.pathname',
+      expression: '(() => ({ pathname: window.location.pathname, hasRoot: !!document.getElementById("ag-minimap-root") }))()',
       returnByValue: true
     });
-    const pathname = res?.result?.value || '';
+    const info = res?.result?.value || {};
+    const pathname = info.pathname || '';
+    const hasRoot = !!info.hasRoot;
     const m = pathname.match(/\/c\/([a-f0-9\-]+)/);
     const convId = m ? m[1] : null;
 
@@ -119,38 +147,51 @@ async function loopSync() {
               let content = obj.content || '';
               const matchReq = content.match(/<USER_REQUEST>([\s\S]*?)<\/USER_REQUEST>/);
               if (matchReq) content = matchReq[1].trim();
-              allPrompts.push({
-                text: content
-              });
+              if (content) {
+                allPrompts.push({
+                  text: content
+                });
+              }
             }
           } catch (e) {}
         }
       }
 
       const hash = convId + '_' + JSON.stringify(allPrompts.map(p => p.text));
-      if (hash !== lastPromptsHash) {
+      // 只要会话切换、内容变动，或者 DOM 重新加载导致丢失时，立即渲染/重建
+      if (hash !== lastPromptsHash || !hasRoot) {
         lastConvId = convId;
         lastPromptsHash = hash;
         console.log(`[${new Date().toLocaleTimeString()}] Rendered ${allPrompts.length} prompts for conv: ${convId}`);
-
-        await renderCleanMinimap(allPrompts);
+        await renderCleanMinimap(convId, allPrompts);
       }
     } else {
-      // 不在会话页面时隐藏刻度条
-      await sendCDP('Runtime.evaluate', {
-        expression: `(() => { const r = document.getElementById('ag-minimap-root'); if (r) r.style.display = 'none'; })()`
-      });
+      if (lastConvId !== null) {
+        lastConvId = null;
+        lastPromptsHash = '';
+        await sendCDP('Runtime.evaluate', {
+          expression: `(() => { const r = document.getElementById('ag-minimap-root'); if (r) r.style.display = 'none'; })()`
+        });
+      }
     }
   } catch (e) {
     // ignore
   }
 
-  setTimeout(loopSync, 1500);
+  setTimeout(loopSync, 600);
 }
 
-async function renderCleanMinimap(prompts) {
+async function renderCleanMinimap(convId, prompts) {
+  if (!prompts || prompts.length === 0) {
+    await sendCDP('Runtime.evaluate', {
+      expression: `(() => { const r = document.getElementById('ag-minimap-root'); if (r) r.remove(); })()`
+    });
+    return;
+  }
+
   const code = `
     (() => {
+      const currentConvId = ${JSON.stringify(convId)};
       const promptsData = ${JSON.stringify(prompts)};
 
       // 1. 样式表
@@ -206,7 +247,7 @@ async function renderCleanMinimap(prompts) {
           box-shadow: 0 0 8px rgba(74, 222, 128, 0.7);
         }
 
-        /* 鼠标没放上去时：绝对隐藏，禁止显示任何文字 */
+        /* 鼠标没放上去时：绝对隐藏大卡片，禁止显示任何文字 */
         #ag-minimap-card {
           display: none !important;
           position: absolute;
@@ -318,12 +359,13 @@ async function renderCleanMinimap(prompts) {
         }
       \`;
 
-      // 2. 根结构
+      // 2. 根结构挂载与标识绑定
       let root = document.getElementById('ag-minimap-root');
       if (root) root.remove();
 
       root = document.createElement('div');
       root.id = 'ag-minimap-root';
+      root.dataset.convId = currentConvId;
 
       const card = document.createElement('div');
       card.id = 'ag-minimap-card';
@@ -344,7 +386,24 @@ async function renderCleanMinimap(prompts) {
 
       const listEl = card.querySelector('#ag-minimap-items');
 
-      // 精准寻找聊天主滚动容器（坚决排除输入框和左侧栏）
+      // 3. 浏览器端毫秒级路由监听：一旦切换到其他会话，立刻隐匿旧会话内容，杜绝跨会话残留
+      if (!window.__agRouteWatcher) {
+        window.__agRouteWatcher = setInterval(() => {
+          const curPath = window.location.pathname;
+          const m = curPath.match(/\\/c\\/([a-f0-9\\-]+)/);
+          const curConv = m ? m[1] : null;
+          const r = document.getElementById('ag-minimap-root');
+          if (r) {
+            if (!curConv || r.dataset.convId !== curConv) {
+              r.style.display = 'none';
+            } else {
+              r.style.display = '';
+            }
+          }
+        }, 150);
+      }
+
+      // 精准寻找聊天主滚动容器
       function getChatScroller() {
         const anchor = document.querySelector('[data-turn-content]') ||
                        document.querySelector('.md-sticky-message-bleed') ||
@@ -403,13 +462,11 @@ async function renderCleanMinimap(prompts) {
         const rect = node.getBoundingClientRect();
         const distance = Math.abs(rect.top - window.innerHeight / 2);
 
-        // 远距离 (大跨度 > 750px) 采用极速直接跳转 ('auto')，杜绝大长屏慢速滚动的掉帧与卡顿；
-        // 近距离 (<= 750px) 采用丝滑平滑滚动 ('smooth')。
+        // 远距离直接瞬移 (auto) 杜绝长屏幕掉帧卡顿；近距离平滑 (smooth)
         const behavior = distance > 750 ? 'auto' : 'smooth';
         node.scrollIntoView({ behavior, block: 'center' });
         pulseHighlight(node);
 
-        // 250ms 后单次微调复核（防止异步图片或代码块渲染产生的布局漂移），不再循环打断
         window.__minimapAnchorTimer = setTimeout(() => {
           if (node.isConnected) {
             const r = node.getBoundingClientRect();
@@ -444,12 +501,12 @@ async function renderCleanMinimap(prompts) {
         row.addEventListener('mouseenter', highlight);
         tick.addEventListener('mouseenter', highlight);
 
-        // 核心跳转函数：解决未加载历史、Lexical回弹与精准居中锚定
+        // 核心跳转：仅在用户主动点击时才定位，绝对禁止任何后台自主自动跳转
         async function jump(e) {
           e.stopPropagation();
           window.__minimapIsJumping = true;
 
-          // 1. 彻底移走输入框焦点，阻断底层 Lexical 编辑器将视口弹回底部
+          // 阻断底层输入框回弹
           if (document.activeElement && typeof document.activeElement.blur === 'function') {
             document.activeElement.blur();
           }
@@ -460,7 +517,7 @@ async function renderCleanMinimap(prompts) {
 
           const total = promptsData.length;
 
-          // 最底部的最新语句：直接滚到底部
+          // 最底部的最新语句直接滚到底部
           if (idx === total - 1) {
             scroller.scrollTop = scroller.scrollHeight;
             setTimeout(() => {
@@ -493,8 +550,8 @@ async function renderCleanMinimap(prompts) {
             return;
           }
 
-          // 如果还没渲染到 DOM 中（由于尚未加载更早的历史记录），自动循环触发加载更早消息，直到目标出现
-          for (let round = 0; round < 10; round++) {
+          // 如果还没渲染到 DOM 中（由于尚未加载更早的历史记录），按需触发加载更早消息，直到目标出现
+          for (let round = 0; round < 12; round++) {
             scroller.scrollTop = 0;
             const loadBtn = Array.from(document.querySelectorAll('button')).find(b => b.innerText.includes('Load older messages'));
             if (loadBtn) {
@@ -503,9 +560,8 @@ async function renderCleanMinimap(prompts) {
             }
             scroller.dispatchEvent(new Event('scroll'));
 
-            // 等待数据加载并轮询检测（最多等待 2.4 秒，每 150ms 检查一次）
-            for (let wait = 0; wait < 16; wait++) {
-              await new Promise(r => setTimeout(r, 150));
+            for (let wait = 0; wait < 12; wait++) {
+              await new Promise(r => setTimeout(r, 120));
               targetNode = findTarget();
               if (targetNode) {
                 lockAndCenter(targetNode);
@@ -513,7 +569,6 @@ async function renderCleanMinimap(prompts) {
               }
             }
 
-            // 检查是否还有加载按钮
             const stillHasBtn = Array.from(document.querySelectorAll('button')).find(b => b.innerText.includes('Load older messages'));
             if (!stillHasBtn) {
               const allSteps = Array.from(document.querySelectorAll('[data-testid="user-input-step"]'));
@@ -539,7 +594,7 @@ async function renderCleanMinimap(prompts) {
       if (bar.lastElementChild) bar.lastElementChild.classList.add('active');
       if (listEl.lastElementChild) listEl.lastElementChild.classList.add('active');
 
-      // 监听用户在聊天窗口中自行滚动，自动高亮右侧对应刻度
+      // 用户自行滚动时联动高亮
       const scroller = getChatScroller();
       if (scroller && !scroller.__minimapScrollBound) {
         scroller.__minimapScrollBound = true;
@@ -547,11 +602,10 @@ async function renderCleanMinimap(prompts) {
         let ticking = false;
 
         scroller.addEventListener('scroll', () => {
-          // 跳转执行期间完全跳过监听，避免强制布局重排产生卡顿
           if (window.__minimapIsJumping) return;
 
           const now = Date.now();
-          if (now - lastScrollCheck < 120) return; // 120ms 节流，消除滚动时的强制重排卡顿
+          if (now - lastScrollCheck < 100) return;
           lastScrollCheck = now;
 
           if (ticking) return;
@@ -580,37 +634,6 @@ async function renderCleanMinimap(prompts) {
           });
         }, { passive: true });
       }
-
-      // 4. 静默后台自动预加载（彻底消除跳转等待，实现瞬发直达）
-      function startSilentPreload() {
-        if (window.__preloadActive) return;
-        window.__preloadActive = true;
-
-        async function loop() {
-          while (true) {
-            if (window.__minimapIsJumping) {
-              await new Promise(r => setTimeout(r, 400));
-              continue;
-            }
-            const loadBtn = Array.from(document.querySelectorAll('button')).find(b => b.innerText.includes('Load older messages'));
-            if (!loadBtn) {
-              window.__preloadActive = false;
-              break;
-            }
-            // 静默触发拉取历史消息，完全不触碰滚动条位置，用户零感知
-            loadBtn.click();
-            loadBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-            await new Promise(r => setTimeout(r, 550));
-          }
-        }
-        loop().catch(() => { window.__preloadActive = false; });
-      }
-
-      // 页面加载或切换会话时，立即在后台静默预热拉取
-      startSilentPreload();
-
-      // 鼠标悬停小地图区域时，若尚未加载完则高优先级积极预加载
-      root.addEventListener('mouseenter', startSilentPreload, { passive: true });
     })()
   `;
 

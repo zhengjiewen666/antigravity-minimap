@@ -15,18 +15,16 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-set "TARGET_DIR=%~dp0"
 set "STARTUP_FOLDER=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
 set "VBS_TARGET=%STARTUP_FOLDER%\antigravity_minimap.vbs"
 
-echo [1/3] 正在配置 Windows 开机静默启动项...
-(
-echo Set ws = CreateObject^("Wscript.Shell"^)
-echo ws.Run "node """ ^& "%TARGET_DIR%toc_daemon.js" ^& """", 0, False
-) > "%VBS_TARGET%"
+echo [1/3] 正在同步守护程序至系统配置目录...
+if not exist "%USERPROFILE%\.gemini\antigravity" mkdir "%USERPROFILE%\.gemini\antigravity"
+copy /y "%~dp0toc_daemon.js" "%USERPROFILE%\.gemini\antigravity\toc_daemon.js" >nul
 
-echo [2/3] 开机启动项配置成功！
-echo.
+echo [2/3] 正在配置 Windows 开机静默启动项...
+powershell -NoProfile -Command "$vbs = 'Set ws = CreateObject(\"Wscript.Shell\")`nuserProfile = ws.ExpandEnvironmentStrings(\"%USERPROFILE%\")`nws.Run \"\"\"node\"\" \"\"\" & userProfile & \"\.gemini\antigravity\toc_daemon.js\"\"\", 0, False'; [System.IO.File]::WriteAllText($env:VBS_TARGET, $vbs, [System.Text.Encoding]::ASCII)"
+
 echo [3/3] 正在启动后台守护服务...
 wscript.exe "%VBS_TARGET%"
 
