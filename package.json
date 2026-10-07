@@ -1,0 +1,25 @@
+{
+  "name": "antigravity-minimap",
+  "version": "1.0.0",
+  "description": "Interactive Prompt Minimap & Outline Navigation for Google Antigravity Desktop AI",
+  "main": "toc_daemon.js",
+  "scripts": {
+    "start": "node toc_daemon.js"
+  },
+  "keywords": [
+    "antigravity",
+    "google-antigravity",
+    "minimap",
+    "table-of-contents",
+    "outline",
+    "electron",
+    "cdp",
+    "prompt-navigation"
+  ],
+  "author": "zhengjiewen666",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zhengjiewen666/antigravity-minimap.git"
+  }
+}
