@@ -45,6 +45,25 @@ const lockServer = http.createServer((req, res) => {
     }));
     return;
   }
+  if (req.url === '/eval' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      try {
+        const result = await sendCDP('Runtime.evaluate', {
+          expression: body,
+          returnByValue: true,
+          awaitPromise: true
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify(result));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
   res.writeHead(200);
   res.end('Antigravity Minimap & Fork Daemon Active');
 });
@@ -191,6 +210,15 @@ const CSS_STYLES = `
   opacity: 1 !important;
   background: rgba(74, 222, 128, 0.16) !important;
   border-left: 3px solid #4ade80 !important;
+  padding-left: 12px;
+}
+
+/* 点击定位加载中状态 */
+.ag-minimap-row.loading {
+  color: #60a5fa !important;
+  opacity: 1 !important;
+  background: rgba(37, 99, 235, 0.22) !important;
+  border-left: 3px solid #3b82f6 !important;
   padding-left: 12px;
 }
 
@@ -630,10 +658,18 @@ async function renderCleanMinimap(convId, prompts) {
 
           const total = promptsData.length;
 
+          const currentJumpId = Date.now();
+          window.__minimapJumpId = currentJumpId;
+
+          // 视觉状态：立即显示正在定位
+          document.querySelectorAll('.ag-minimap-row').forEach(r => r.classList.remove('loading'));
+          row.classList.add('loading');
+
           if (idx === total - 1) {
             scroller.scrollTop = scroller.scrollHeight;
             setTimeout(() => {
               const steps = Array.from(document.querySelectorAll('[data-testid="user-input-step"]'));
+              row.classList.remove('loading');
               if (steps.length > 0) {
                 lockAndCenter(steps[steps.length - 1]);
               } else {
@@ -645,54 +681,95 @@ async function renderCleanMinimap(convId, prompts) {
 
           function findTarget() {
             const steps = Array.from(document.querySelectorAll('[data-testid="user-input-step"]'));
-            const query = (item.text || '').trim().slice(0, 15);
+            if (!steps.length) return null;
+
+            // 净化原始提问文本：剥离引文标记 @[Quote]、标签 @[File] 以及 markdown 链接
+            const clean = (item.text || '')
+              .replace(/@\[.*?\]/g, '')
+              .replace(/<[^>]+>/g, '')
+              .replace(/\[.*?\]\(.*?\)/g, '$1')
+              .replace(/\s+/g, ' ')
+              .trim();
+
+            // 提取核心特征词（中文2字以上短语或英文标识符）
+            const words = clean.match(/[\u4e00-\u9fa5]{2,10}|[a-zA-Z0-9_\-]{3,15}/g) || [clean.slice(0, 10)];
+            const leadWords = words.filter(Boolean).slice(0, 3);
+
             let match = steps.find(s => {
-              const txt = s.innerText || '';
-              return (query && txt.includes(query)) || (item.text.length > 4 && txt.includes(item.text.slice(0, 8)));
+              const st = (s.innerText || '').replace(/\s+/g, ' ');
+              if (clean.length > 5 && st.includes(clean.slice(0, 15))) return true;
+              for (const w of leadWords) {
+                if (w.length >= 2 && st.includes(w)) return true;
+              }
+              return false;
             });
-            if (!match && steps.length === total && steps[idx]) {
+
+            if (!match && steps.length >= total && steps[idx]) {
               match = steps[idx];
             }
+
+            const btn = document.querySelector('button[aria-label*="Load older"], button[aria-label*="older messages"]');
+            if (!match && idx === 0 && !btn && steps[0]) {
+              match = steps[0];
+            }
+
             return match;
           }
 
           let targetNode = findTarget();
           if (targetNode) {
+            row.classList.remove('loading');
             lockAndCenter(targetNode);
             return;
           }
 
-          for (let round = 0; round < 12; round++) {
-            scroller.scrollTop = 0;
-            const loadBtn = Array.from(document.querySelectorAll('button')).find(b => b.innerText.includes('Load older messages'));
-            if (loadBtn) {
-              loadBtn.click();
-              loadBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-            }
-            scroller.dispatchEvent(new Event('scroll'));
+          // 目标未在视口内（被虚拟列表截断）：启动极速事件响应式向上回溯加载
+          const maxRounds = 40;
+          for (let round = 0; round < maxRounds; round++) {
+            if (window.__minimapJumpId !== currentJumpId) return;
 
-            for (let wait = 0; wait < 12; wait++) {
-              await new Promise(r => setTimeout(r, 120));
-              targetNode = findTarget();
-              if (targetNode) {
-                lockAndCenter(targetNode);
-                return;
-              }
+            const btn = document.querySelector('button[aria-label*="Load older"], button[aria-label*="older messages"]');
+            if (!btn) break;
+
+            const oldLabel = btn.getAttribute('aria-label');
+            btn.click();
+
+            // 毫秒级轮询等待标签变动（响应式感知 React DOM 完成装载，平均仅 20-35ms）
+            for (let w = 0; w < 30; w++) {
+              await new Promise(res => setTimeout(res, 20));
+              if (window.__minimapJumpId !== currentJumpId) return;
+              const curBtn = document.querySelector('button[aria-label*="Load older"], button[aria-label*="older messages"]');
+              if (!curBtn || curBtn.getAttribute('aria-label') !== oldLabel) break;
             }
 
-            const stillHasBtn = Array.from(document.querySelectorAll('button')).find(b => b.innerText.includes('Load older messages'));
-            if (!stillHasBtn) {
-              const allSteps = Array.from(document.querySelectorAll('[data-testid="user-input-step"]'));
-              const fallback = allSteps[idx] || (idx === 0 ? allSteps[0] : allSteps[allSteps.length - 1]);
-              if (fallback) {
-                lockAndCenter(fallback);
-              } else {
-                window.__minimapIsJumping = false;
-              }
+            targetNode = findTarget();
+            if (targetNode) {
+              row.classList.remove('loading');
+              lockAndCenter(targetNode);
               return;
             }
           }
-          window.__minimapIsJumping = false;
+
+          // 遍历结束或到达顶部：容错兜底中心化
+          await new Promise(res => setTimeout(res, 60));
+          if (window.__minimapJumpId !== currentJumpId) return;
+          targetNode = findTarget();
+          if (!targetNode) {
+            const allSteps = Array.from(document.querySelectorAll('[data-testid="user-input-step"]'));
+            if (allSteps.length > 0) {
+              targetNode = allSteps[idx] || (idx < total / 2 ? allSteps[0] : allSteps[allSteps.length - 1]);
+            }
+          }
+
+          row.classList.remove('loading');
+          if (targetNode) {
+            lockAndCenter(targetNode);
+          } else {
+            if (idx === 0) {
+              scroller.scrollTop = 0;
+            }
+            window.__minimapIsJumping = false;
+          }
         }
 
         tick.onclick = jump;
