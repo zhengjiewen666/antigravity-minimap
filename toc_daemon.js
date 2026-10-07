@@ -12,11 +12,41 @@ console.log = (...args) => {
   } catch (e) {}
 };
 
-process.on('uncaughtException', (err) => {});
-process.on('unhandledRejection', (reason) => {});
+const http = require('http');
 
-// 单实例锁，防止多开（占用 48899 端口）
-const lockServer = net.createServer();
+const logFile = path.join(process.env.USERPROFILE, '.gemini', 'antigravity', 'daemon.log');
+function log(...args) {
+  const line = `[${new Date().toLocaleTimeString()}] ` + args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' ') + '\n';
+  try {
+    fs.appendFileSync(logFile, line);
+    if (fs.statSync(logFile).size > 1024 * 1024) {
+      fs.truncateSync(logFile, 0);
+    }
+  } catch (e) {}
+}
+
+if (process.stdout) process.stdout.on('error', () => {});
+if (process.stderr) process.stderr.on('error', () => {});
+
+process.on('uncaughtException', (err) => { log('uncaughtException:', err.message); });
+process.on('unhandledRejection', (reason) => { log('unhandledRejection:', String(reason)); });
+
+// HTTP 单实例锁与状态服务
+const lockServer = http.createServer((req, res) => {
+  if (req.url === '/status') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      status: 'ok',
+      lastConvId,
+      wsConnected: !!(ws && ws.readyState === 1),
+      lastPromptsHash
+    }));
+    return;
+  }
+  res.writeHead(200);
+  res.end('Antigravity Minimap & Fork Daemon Active');
+});
+
 lockServer.once('error', (err) => {
   if (err.code === 'EADDRINUSE') {
     process.exit(0);
@@ -54,7 +84,7 @@ async function connect() {
     ws = new WebSocket(page.webSocketDebuggerUrl);
 
     ws.onopen = async () => {
-      console.log('Antigravity Enhanced Daemon (Minimap & Fork) connected');
+      log('Antigravity Enhanced Daemon connected');
       lastConvId = null;
       lastPromptsHash = '';
       lastFlagsChecked = 0;
@@ -62,10 +92,12 @@ async function connect() {
     };
 
     ws.onclose = () => {
+      ws = null;
       scheduleReconnect();
     };
 
     ws.onerror = () => {
+      ws = null;
       scheduleReconnect();
     };
   } catch (e) {
@@ -115,7 +147,7 @@ function sendCDP(method, params) {
 // 自动保证原生分叉与分支实验特性的常驻开启
 async function ensureForkFlags() {
   const now = Date.now();
-  if (now - lastFlagsChecked < 30000) return; // 30秒检查一次即可
+  if (now - lastFlagsChecked < 30000) return;
   lastFlagsChecked = now;
 
   await sendCDP('Runtime.evaluate', {
@@ -153,12 +185,13 @@ async function loopSync() {
     await ensureForkFlags();
 
     const res = await sendCDP('Runtime.evaluate', {
-      expression: '(() => ({ pathname: window.location.pathname, hasRoot: !!document.getElementById("ag-minimap-root") }))()',
+      expression: '(() => ({ pathname: window.location.pathname, hasRoot: !!document.getElementById("ag-minimap-root"), datasetConv: document.getElementById("ag-minimap-root")?.dataset?.convId }))()',
       returnByValue: true
     });
     const info = res?.result?.value || {};
     const pathname = info.pathname || '';
     const hasRoot = !!info.hasRoot;
+    const datasetConv = info.datasetConv || null;
     const m = pathname.match(/\/c\/([a-f0-9\-]+)/);
     const convId = m ? m[1] : null;
 
@@ -195,10 +228,10 @@ async function loopSync() {
       }
 
       const hash = convId + '_' + JSON.stringify(allPrompts.map(p => p.text));
-      if (hash !== lastPromptsHash || !hasRoot) {
+      if (convId !== lastConvId || hash !== lastPromptsHash || !hasRoot || datasetConv !== convId) {
         lastConvId = convId;
         lastPromptsHash = hash;
-        console.log(`[${new Date().toLocaleTimeString()}] Rendered ${allPrompts.length} prompts & fork tools for conv: ${convId}`);
+        log(`Rendered ${allPrompts.length} prompts & fork tools for conv: ${convId}`);
         await renderCleanMinimap(convId, allPrompts);
       }
     } else {
@@ -211,7 +244,7 @@ async function loopSync() {
       }
     }
   } catch (e) {
-    // ignore
+    log('loopSync error:', e.message);
   }
 
   setTimeout(loopSync, 600);
