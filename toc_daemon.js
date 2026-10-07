@@ -750,14 +750,20 @@ async function renderCleanMinimap(convId, prompts) {
             }
           }
 
-          // 遍历结束或到达顶部：容错兜底中心化
+          // 遍历结束或到达顶部：精准匹配优先，绝不随意跳到顶部
           await new Promise(res => setTimeout(res, 60));
           if (window.__minimapJumpId !== currentJumpId) return;
           targetNode = findTarget();
           if (!targetNode) {
             const allSteps = Array.from(document.querySelectorAll('[data-testid="user-input-step"]'));
             if (allSteps.length > 0) {
-              targetNode = allSteps[idx] || (idx < total / 2 ? allSteps[0] : allSteps[allSteps.length - 1]);
+              if (idx === 0) {
+                targetNode = allSteps[0];
+              } else if (idx === total - 1) {
+                targetNode = allSteps[allSteps.length - 1];
+              } else if (allSteps[idx]) {
+                targetNode = allSteps[idx];
+              }
             }
           }
 
@@ -765,9 +771,6 @@ async function renderCleanMinimap(convId, prompts) {
           if (targetNode) {
             lockAndCenter(targetNode);
           } else {
-            if (idx === 0) {
-              scroller.scrollTop = 0;
-            }
             window.__minimapIsJumping = false;
           }
         }
