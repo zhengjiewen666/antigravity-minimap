@@ -207,101 +207,192 @@ lockServer.listen(48899, '127.0.0.1');
 const CSS_STYLES = `
 #ag-minimap-root {
   position: fixed;
-  right: 12px;
-  top: 50%;
-  transform: translateY(-50%);
   z-index: 999999;
   user-select: none;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  touch-action: none;
 }
 
-/* 平时右侧小横线刻度条 */
-#ag-minimap-bar {
+/* 核心可移动悬浮球 */
+#ag-minimap-ball {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(22, 25, 33, 0.9);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1.5px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.12);
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 5px;
-  padding: 8px 5px;
-  background: rgba(20, 22, 26, 0.4);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-#ag-minimap-root:hover #ag-minimap-bar {
-  background: rgba(20, 22, 26, 0.85);
-  border-color: rgba(255, 255, 255, 0.16);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+  cursor: grab;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+  position: relative;
 }
 
-.ag-minimap-tick {
-  width: 14px;
-  height: 3px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.35);
-  transition: all 0.15s ease;
-}
-.ag-minimap-tick.active, .ag-minimap-tick:hover {
-  width: 22px;
-  height: 3.5px;
-  background: #4ade80 !important;
-  box-shadow: 0 0 8px rgba(74, 222, 128, 0.7);
-}
-.ag-minimap-tick.is-branch {
-  background: rgba(168, 85, 247, 0.55) !important;
-}
-.ag-minimap-tick.is-branch.active, .ag-minimap-tick.is-branch:hover {
-  width: 22px;
-  height: 3.5px;
-  background: #c084fc !important;
-  box-shadow: 0 0 8px rgba(192, 132, 252, 0.8) !important;
+#ag-minimap-ball:hover {
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.5);
+  box-shadow: 0 6px 24px rgba(14, 165, 233, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  transform: scale(1.08);
 }
 
-/* 鼠标没放上去时：绝对隐藏大卡片，禁止显示任何文字 */
-#ag-minimap-card {
-  display: none !important;
+#ag-minimap-ball.dragging {
+  cursor: grabbing !important;
+  transform: scale(1.12) !important;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6) !important;
+  border-color: #38bdf8 !important;
+  color: #38bdf8 !important;
+  transition: none !important;
+}
+
+#ag-minimap-ball.open {
+  border-color: #38bdf8;
+  color: #38bdf8;
+  background: rgba(15, 23, 42, 0.95);
+  box-shadow: 0 0 20px rgba(56, 189, 248, 0.4);
+}
+
+/* 悬浮球右上角提问轮数徽标 */
+.ag-minimap-ball-badge {
   position: absolute;
-  right: 32px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 350px;
-  max-height: 500px;
-  background: rgba(24, 26, 32, 0.98);
-  backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  top: -4px;
+  right: -6px;
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 2.5px 5.5px;
+  border-radius: 10px;
+  border: 1.5px solid #0f172a;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  letter-spacing: -0.2px;
+}
+
+.ag-minimap-ball-badge.is-branch {
+  background: #a855f7 !important;
+  box-shadow: 0 2px 8px rgba(168, 85, 247, 0.5) !important;
+}
+
+/* 展开的目录卡片 */
+#ag-minimap-card {
+  display: none;
+  position: absolute;
+  width: 360px;
+  max-height: 520px;
+  background: rgba(20, 23, 31, 0.96);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 16px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65);
+  box-shadow: 0 16px 45px rgba(0, 0, 0, 0.7);
   padding: 12px 10px;
   box-sizing: border-box;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1000000;
+  animation: agFadeIn 0.18s ease forwards;
 }
 
-/* 鼠标放上去时：整洁的大卡片展开 */
-#ag-minimap-root:hover #ag-minimap-card {
+#ag-minimap-card.open {
   display: flex !important;
-  flex-direction: column;
-  gap: 4px;
+}
+
+@keyframes agFadeIn {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
 }
 
 .ag-minimap-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 2px 8px 8px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  margin-bottom: 4px;
-  font-size: 11px;
-  color: #94a3b8;
-  font-weight: 500;
+  padding: 2px 4px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 12px;
+  color: #cbd5e1;
+  font-weight: 600;
 }
+
+.ag-minimap-header-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.ag-minimap-header-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ag-minimap-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ag-minimap-close-btn {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-size: 14px;
+  line-height: 1;
+  transition: all 0.15s ease;
+}
+.ag-minimap-close-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #e2e8f0;
+}
+
 .ag-minimap-card-badge {
   background: rgba(74, 222, 128, 0.15);
   color: #4ade80;
-  padding: 1px 7px;
+  padding: 2px 8px;
   border-radius: 10px;
   font-size: 10px;
   font-weight: 600;
+  white-space: nowrap;
+}
+
+.ag-minimap-search-box {
+  position: relative;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.ag-minimap-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: rgba(15, 17, 23, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 6px 10px 6px 28px;
+  color: #f1f5f9;
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.ag-minimap-search-input:focus {
+  border-color: #38bdf8;
+  background: rgba(15, 17, 23, 0.95);
+}
+.ag-minimap-search-icon {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #64748b;
+  pointer-events: none;
 }
 
 .ag-minimap-card-list {
@@ -936,7 +1027,7 @@ async function renderCleanMinimap(convId, prompts, forkInfo, parentInfo) {
         document.head.appendChild(style);
       }
 
-      // 2. 根结构挂载与标识绑定
+      // 2. 根结构挂载与悬浮球/卡片初始化
       let root = document.getElementById('ag-minimap-root');
       if (root) root.remove();
 
@@ -944,35 +1035,247 @@ async function renderCleanMinimap(convId, prompts, forkInfo, parentInfo) {
       root.id = 'ag-minimap-root';
       root.dataset.convId = currentConvId;
 
+      // 核心悬浮球
+      const ball = document.createElement('div');
+      ball.id = 'ag-minimap-ball';
+      ball.title = '提问导航与分支管理 (点击展开/拖拽移动)';
+      ball.innerHTML =
+        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' +
+          '<line x1="4" y1="6" x2="20" y2="6"></line>' +
+          '<line x1="4" y1="12" x2="14" y2="12"></line>' +
+          '<line x1="4" y1="18" x2="18" y2="18"></line>' +
+          '<circle cx="18" cy="12" r="2.2" fill="currentColor"></circle>' +
+        '</svg>' +
+        '<span class="ag-minimap-ball-badge' + (currentForkInfo ? ' is-branch' : '') + '">' + promptsData.length + '</span>';
+
+      // 展开的导航卡片
       const card = document.createElement('div');
       card.id = 'ag-minimap-card';
 
-      let headerTitleHtml = '<span>提问导航与分支管理</span>';
-      let headerBadgeHtml = '<span class="ag-minimap-card-badge">' + promptsData.length + ' 轮提问</span>';
+      let headerTitleHtml = '<div class="ag-minimap-header-left">' +
+        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h10M4 18h14"/></svg>' +
+        '<span class="ag-minimap-header-title">提问导航与分支管理</span></div>';
+      let headerBadgeHtml = '<div class="ag-minimap-header-actions">' +
+        '<span class="ag-minimap-card-badge">' + promptsData.length + ' 轮提问</span>' +
+        '<button class="ag-minimap-close-btn" title="收起目录">✕</button></div>';
 
       if (currentForkInfo) {
-        headerTitleHtml = '<span style="color:#c084fc;font-weight:600;display:flex;align-items:center;gap:4px">' +
-          '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="9" r="3"/><path d="M6 9v6"/><path d="M18 9c0 3-3 6-12 6"/></svg>' +
-          '分支对话 (分叉自 #' + currentForkInfo.forkRound + ')</span>';
-        headerBadgeHtml = '<span class="ag-minimap-card-badge" style="background:rgba(168,85,247,0.18);color:#c084fc;border:1px solid rgba(168,85,247,0.4)">' +
-          promptsData.length + ' 轮提问</span>';
+        headerTitleHtml = '<div class="ag-minimap-header-left">' +
+          '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#c084fc" stroke-width="2.5"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="9" r="3"/><path d="M6 9v6"/><path d="M18 9c0 3-3 6-12 6"/></svg>' +
+          '<span class="ag-minimap-header-title" style="color:#c084fc">分支 (#' + currentForkInfo.forkRound + ' 起)</span></div>';
+        headerBadgeHtml = '<div class="ag-minimap-header-actions">' +
+          '<span class="ag-minimap-card-badge" style="background:rgba(168,85,247,0.18);color:#c084fc;border:1px solid rgba(168,85,247,0.4)">' +
+          promptsData.length + ' 轮</span>' +
+          '<button class="ag-minimap-close-btn" title="收起目录">✕</button></div>';
       } else if (currentParentInfo && currentParentInfo.forkCount > 0) {
-        headerTitleHtml = '<span style="color:#60a5fa;font-weight:600;display:flex;align-items:center;gap:4px">' +
-          '📌 主干对话 (' + currentParentInfo.forkCount + ' 个分支)</span>';
-        headerBadgeHtml = '<span class="ag-minimap-card-badge" style="background:rgba(59,130,246,0.18);color:#60a5fa;border:1px solid rgba(59,130,246,0.4)">' +
-          promptsData.length + ' 轮提问</span>';
+        headerTitleHtml = '<div class="ag-minimap-header-left">' +
+          '<span class="ag-minimap-header-title" style="color:#60a5fa">📌 主干 (' + currentParentInfo.forkCount + ' 个分支)</span></div>';
+        headerBadgeHtml = '<div class="ag-minimap-header-actions">' +
+          '<span class="ag-minimap-card-badge" style="background:rgba(59,130,246,0.18);color:#60a5fa;border:1px solid rgba(59,130,246,0.4)">' +
+          promptsData.length + ' 轮</span>' +
+          '<button class="ag-minimap-close-btn" title="收起目录">✕</button></div>';
       }
 
-      card.innerHTML = '<div class="ag-minimap-card-header">' + headerTitleHtml + headerBadgeHtml + '</div><div id="ag-minimap-items" class="ag-minimap-card-list"></div>';
+      card.innerHTML =
+        '<div class="ag-minimap-card-header">' + headerTitleHtml + headerBadgeHtml + '</div>' +
+        '<div class="ag-minimap-search-box">' +
+          '<svg class="ag-minimap-search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>' +
+          '<input type="text" class="ag-minimap-search-input" placeholder="搜索提问 (共 ' + promptsData.length + ' 轮)..." />' +
+        '</div>' +
+        '<div id="ag-minimap-items" class="ag-minimap-card-list"></div>';
 
-      const bar = document.createElement('div');
-      bar.id = 'ag-minimap-bar';
-
+      root.appendChild(ball);
       root.appendChild(card);
-      root.appendChild(bar);
       document.body.appendChild(root);
 
       const listEl = card.querySelector('#ag-minimap-items');
+
+      // 恢复记忆的悬浮球位置或赋初始位置
+      function restoreBallPosition() {
+        let left, top;
+        try {
+          const saved = JSON.parse(window.localStorage.getItem('ag_minimap_ball_pos'));
+          if (saved && typeof saved.left === 'number' && typeof saved.top === 'number') {
+            left = saved.left;
+            top = saved.top;
+          }
+        } catch(e) {}
+
+        const maxLeft = Math.max(10, window.innerWidth - 56);
+        const maxTop = Math.max(10, window.innerHeight - 56);
+
+        if (typeof left !== 'number' || typeof top !== 'number') {
+          // 默认居右侧偏下位置，既不遮挡右侧按钮，也不遮挡正文
+          left = window.innerWidth - 60;
+          top = Math.max(80, window.innerHeight - 150);
+        } else {
+          left = Math.max(8, Math.min(maxLeft, left));
+          top = Math.max(8, Math.min(maxTop, top));
+        }
+
+        root.style.left = left + 'px';
+        root.style.top = top + 'px';
+        root.style.right = 'auto';
+        root.style.bottom = 'auto';
+        root.style.transform = 'none';
+      }
+      restoreBallPosition();
+
+      // 智能根据悬浮球当前屏幕坐标调整卡片弹出方向与位置，保证永不超出屏幕边界
+      function updateCardPosition() {
+        const rootRect = root.getBoundingClientRect();
+        const cardHeight = Math.min(520, card.offsetHeight || 420);
+
+        if (rootRect.left > window.innerWidth / 2) {
+          card.style.right = '54px';
+          card.style.left = 'auto';
+        } else {
+          card.style.left = '54px';
+          card.style.right = 'auto';
+        }
+
+        const idealTop = - (cardHeight / 2) + 22;
+        const absTop = rootRect.top + idealTop;
+        const absBottom = absTop + cardHeight;
+
+        if (absTop < 14) {
+          card.style.top = (14 - rootRect.top) + 'px';
+          card.style.bottom = 'auto';
+          card.style.transform = 'none';
+        } else if (absBottom > window.innerHeight - 14) {
+          card.style.top = 'auto';
+          card.style.bottom = (rootRect.bottom - (window.innerHeight - 14)) + 'px';
+          card.style.transform = 'none';
+        } else {
+          card.style.top = '50%';
+          card.style.bottom = 'auto';
+          card.style.transform = 'translateY(-50%)';
+        }
+      }
+
+      window.addEventListener('resize', () => {
+        restoreBallPosition();
+        if (card.classList.contains('open')) updateCardPosition();
+      }, { passive: true });
+
+      // 拖拽与点击交互逻辑
+      let isPointerDown = false;
+      let isDragging = false;
+      let dragStartX = 0, dragStartY = 0;
+      let initLeft = 0, initTop = 0;
+      let movedDist = 0;
+
+      ball.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        isPointerDown = true;
+        isDragging = false;
+        movedDist = 0;
+        dragStartX = e.clientX;
+        dragStartY = e.clientY;
+        const rect = root.getBoundingClientRect();
+        initLeft = rect.left;
+        initTop = rect.top;
+        try { ball.setPointerCapture(e.pointerId); } catch(err) {}
+      });
+
+      ball.addEventListener('pointermove', (e) => {
+        if (!isPointerDown) return;
+        const dx = e.clientX - dragStartX;
+        const dy = e.clientY - dragStartY;
+        movedDist = Math.hypot(dx, dy);
+
+        if (!isDragging && movedDist > 4) {
+          isDragging = true;
+          ball.classList.add('dragging');
+        }
+
+        if (isDragging) {
+          let newLeft = initLeft + dx;
+          let newTop = initTop + dy;
+          newLeft = Math.max(8, Math.min(window.innerWidth - 52, newLeft));
+          newTop = Math.max(8, Math.min(window.innerHeight - 52, newTop));
+          root.style.left = newLeft + 'px';
+          root.style.top = newTop + 'px';
+          if (card.classList.contains('open')) updateCardPosition();
+        }
+      });
+
+      const handlePointerUp = (e) => {
+        if (!isPointerDown) return;
+        isPointerDown = false;
+        ball.classList.remove('dragging');
+        try { ball.releasePointerCapture(e.pointerId); } catch(err) {}
+
+        if (isDragging) {
+          const rect = root.getBoundingClientRect();
+          window.localStorage.setItem('ag_minimap_ball_pos', JSON.stringify({ left: rect.left, top: rect.top }));
+          setTimeout(() => { isDragging = false; }, 60);
+        } else {
+          toggleCard();
+        }
+      };
+
+      ball.addEventListener('pointerup', handlePointerUp);
+      ball.addEventListener('pointercancel', handlePointerUp);
+
+      function toggleCard() {
+        const isOpen = card.classList.contains('open');
+        if (isOpen) {
+          card.classList.remove('open');
+          ball.classList.remove('open');
+        } else {
+          card.classList.add('open');
+          ball.classList.add('open');
+          updateCardPosition();
+          setTimeout(() => {
+            const activeRow = listEl.querySelector('.ag-minimap-row.active');
+            if (activeRow) {
+              activeRow.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            }
+            const searchInput = card.querySelector('.ag-minimap-search-input');
+            if (searchInput && promptsData.length > 8) searchInput.focus();
+          }, 50);
+        }
+      }
+
+      // 卡片关闭按钮
+      const closeBtn = card.querySelector('.ag-minimap-close-btn');
+      if (closeBtn) {
+        closeBtn.onclick = (e) => {
+          e.stopPropagation();
+          card.classList.remove('open');
+          ball.classList.remove('open');
+        };
+      }
+
+      // 点击外部关闭卡片
+      document.addEventListener('pointerdown', (e) => {
+        if (!root.contains(e.target) && card.classList.contains('open')) {
+          card.classList.remove('open');
+          ball.classList.remove('open');
+        }
+      });
+
+      // Escape 按键关闭卡片
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && card.classList.contains('open')) {
+          card.classList.remove('open');
+          ball.classList.remove('open');
+        }
+      });
+
+      // 搜索实时过滤
+      const searchInput = card.querySelector('.ag-minimap-search-input');
+      if (searchInput) {
+        searchInput.addEventListener('input', () => {
+          const q = searchInput.value.trim().toLowerCase();
+          const rows = listEl.querySelectorAll('.ag-minimap-row');
+          rows.forEach(r => {
+            const txt = (r.getAttribute('data-search-text') || '').toLowerCase();
+            r.style.display = (!q || txt.includes(q)) ? 'flex' : 'none';
+          });
+        });
+      }
 
       // 3. 浏览器端毫秒级路由监听：一旦切换到其他会话，立刻隐匿旧会话内容，杜绝跨会话残留
       if (!window.__agRouteWatcher) {
@@ -1154,13 +1457,10 @@ async function renderCleanMinimap(convId, prompts, forkInfo, parentInfo) {
           listEl.appendChild(divider);
         }
 
-        const tick = document.createElement('div');
-        tick.className = 'ag-minimap-tick' + (isBranchTurn ? ' is-branch' : '');
-        tick.setAttribute('data-idx', idx);
-
         const row = document.createElement('div');
         row.className = 'ag-minimap-row' + (isBranchTurn ? ' is-branch' : '');
         row.setAttribute('data-idx', idx);
+        row.setAttribute('data-search-text', '#' + (idx + 1) + ' ' + (item.text || ''));
         row.title = item.text;
 
         const idxSpan = document.createElement('span');
@@ -1208,12 +1508,9 @@ async function renderCleanMinimap(convId, prompts, forkInfo, parentInfo) {
 
         function highlight() {
           document.querySelectorAll('.ag-minimap-row').forEach(r => r.classList.remove('active'));
-          document.querySelectorAll('.ag-minimap-tick').forEach(t => t.classList.remove('active'));
           row.classList.add('active');
-          tick.classList.add('active');
         }
         row.addEventListener('mouseenter', highlight);
-        tick.addEventListener('mouseenter', highlight);
 
         async function jump(e) {
           e.stopPropagation();
@@ -1332,14 +1629,10 @@ async function renderCleanMinimap(convId, prompts, forkInfo, parentInfo) {
           }
         }
 
-        tick.onclick = jump;
         row.onclick = jump;
-
-        bar.appendChild(tick);
         listEl.appendChild(row);
       });
 
-      if (bar.lastElementChild) bar.lastElementChild.classList.add('active');
       if (listEl.lastElementChild) listEl.lastElementChild.classList.add('active');
 
       // 用户滚动监听联动高亮（严格基于语义匹配当前顶端步骤，杜绝 DOM 子集索引错位）
@@ -1386,9 +1679,6 @@ async function renderCleanMinimap(convId, prompts, forkInfo, parentInfo) {
             if (matchedPromptIdx !== -1) {
               document.querySelectorAll('.ag-minimap-row').forEach((r, i) => {
                 r.classList.toggle('active', i === matchedPromptIdx);
-              });
-              document.querySelectorAll('.ag-minimap-tick').forEach((t, i) => {
-                t.classList.toggle('active', i === matchedPromptIdx);
               });
             }
           });
