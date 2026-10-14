@@ -4,7 +4,7 @@ title Antigravity Minimap & Gemini Fork 一键安装程序
 
 echo ========================================================
 echo   Google Antigravity 提问导航目录与 Gemini 对话分叉增强
-echo                   一键安装与自启配置
+echo               一键安装与多重自启常驻配置
 echo ========================================================
 echo.
 
@@ -15,25 +15,52 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
+set "TARGET_DIR=%USERPROFILE%\.gemini\antigravity"
+set "CONFIG_DIR=%USERPROFILE%\.gemini\config"
 set "STARTUP_FOLDER=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
 set "VBS_TARGET=%STARTUP_FOLDER%\antigravity_minimap.vbs"
 
-echo [1/3] 正在同步守护程序与看门狗至系统配置目录...
-if not exist "%USERPROFILE%\.gemini\antigravity" mkdir "%USERPROFILE%\.gemini\antigravity"
-copy /y "%~dp0toc_daemon.js" "%USERPROFILE%\.gemini\antigravity\toc_daemon.js" >nul
-copy /y "%~dp0watchdog.vbs" "%USERPROFILE%\.gemini\antigravity\watchdog.vbs" >nul
+echo [1/4] 正在同步守护程序、看门狗与自愈守卫...
+if not exist "%TARGET_DIR%" mkdir "%TARGET_DIR%"
+if not exist "%CONFIG_DIR%" mkdir "%CONFIG_DIR%"
+copy /y "%~dp0toc_daemon.js" "%TARGET_DIR%\toc_daemon.js" >nul
+copy /y "%~dp0watchdog.vbs" "%TARGET_DIR%\watchdog.vbs" >nul
+copy /y "%~dp0guard.js" "%TARGET_DIR%\guard.js" >nul
 
-echo [2/3] 正在配置 Windows 开机静默启动项...
-powershell -NoProfile -Command "$vbs = 'Set ws = CreateObject(\"Wscript.Shell\")`nuserProfile = ws.ExpandEnvironmentStrings(\"%USERPROFILE%\")`nwatchdog = userProfile & \"\.gemini\antigravity\watchdog.vbs\"`nws.Run \"\"\"wscript.exe\"\" \"\"\" & watchdog & \"\"\"\", 0, False'; [System.IO.File]::WriteAllText($env:VBS_TARGET, $vbs, [System.Text.Encoding]::ASCII)"
+echo [2/4] 正在配置 Windows 开机与登录静默自启项...
+powershell -NoProfile -Command "$vbs = 'On Error Resume Next`nSet ws = CreateObject(\"WScript.Shell\")`nup = ws.ExpandEnvironmentStrings(\"%USERPROFILE%\")`nnodeExe = \"C:\Program Files\nodejs\node.exe\"`ndaemonJs = up & \"\.gemini\antigravity\toc_daemon.js\"`nws.Run \"\"\"\" & nodeExe & \"\"\" \"\"\" & daemonJs & \"\"\"\", 0, False'; [System.IO.File]::WriteAllText($env:VBS_TARGET, $vbs, [System.Text.Encoding]::ASCII)"
 
-echo [3/3] 正在启动后台看门狗与守护服务...
+rem 写入注册表用户自启 Run 项
+powershell -NoProfile -Command "Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'AntigravityMinimap' -Value ('wscript.exe \"' + $env:VBS_TARGET + '\"')"
+
+echo [3/4] 正在配置 Antigravity 全局生命周期自愈钩子 (hooks.json)...
+node -e "
+const fs = require('fs');
+const path = require('path');
+const configDir = path.join(process.env.USERPROFILE, '.gemini', 'config');
+const hooksPath = path.join(configDir, 'hooks.json');
+let hooks = {};
+try { if (fs.existsSync(hooksPath)) hooks = JSON.parse(fs.readFileSync(hooksPath, 'utf8')); } catch(e) {}
+hooks['minimap-guard'] = {
+  PreInvocation: [
+    {
+      type: 'command',
+      command: 'node \"' + path.join(process.env.USERPROFILE, '.gemini', 'antigravity', 'guard.js').replace(/\\/g, '/') + '\"'
+    }
+  ]
+};
+fs.writeFileSync(hooksPath, JSON.stringify(hooks, null, 2), 'utf8');
+"
+
+echo [4/4] 正在启动后台守护服务...
 wscript.exe "%VBS_TARGET%"
 
 echo.
 echo ========================================================
-echo [✔] 安装成功！
-echo     Antigravity 提问小地图与 Gemini 分叉功能已常驻后台运行。
-echo     配备自动看门狗机制，确保守护服务永不掉线！
+echo [✔] 安装与多重自启配置成功！
+echo     1. Windows 开机/登录自启项已配置 (Startup + Registry Run)
+echo     2. Antigravity 运行自愈守卫已激活 (hooks.json)
+echo     3. 悬浮球提问导航与分支管理服务已在后台运行！
 echo ========================================================
 echo.
 pause
