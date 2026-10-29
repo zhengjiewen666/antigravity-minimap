@@ -797,10 +797,13 @@ async function runAutoArchivePass() {
     log('[AutoArchive] Starting auto-archive pass for conversations older than 7 days (preserving pinned)...');
     let totalArchivedInPass = 0;
 
-    // 最多执行 3 轮扫描（侧边栏虚拟滚动，归档一批后后续项目会自动上移露出）
-    for (let round = 0; round < 3; round++) {
+    // 全量虚拟滚动巡检归档：适配侧边栏虚拟列表，动态滚屏直至扫描并归档完毕全部超期项
+    for (let pass = 0; pass < 35; pass++) {
       const findCode = `
         (() => {
+          const rows = document.querySelectorAll('[data-testid="conversation-row-sidebar"]');
+          const scrollParent = rows[0]?.closest('[class*="overflow"]');
+
           function isOlderThan7Days(str) {
             if (!str) return false;
             const s = str.trim().toLowerCase();
@@ -815,10 +818,9 @@ async function runAutoArchivePass() {
             return false;
           }
 
-          const rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
           const currentConvId = (window.location.pathname.split('/c/')[1] || '').split('?')[0];
 
-          return rows.map(r => {
+          const candidates = Array.from(rows).map(r => {
             const id = r.getAttribute('data-cascade-id');
             const isPinned = r.getAttribute('data-pinned') === 'true' || !!r.querySelector('[aria-label*="Unpin" i]') || !!r.closest('[data-testid*="pinned"]');
             const isSelected = r.getAttribute('data-selected') === 'true' || id === currentConvId;
@@ -834,17 +836,40 @@ async function runAutoArchivePass() {
               title: (r.querySelector('span.truncate')?.innerText || r.innerText).trim().slice(0, 30)
             };
           }).filter(item => !item.isPinned && !item.isSelected && item.expired);
+
+          // 若当前可见区域没有超期项，且尚未滚动到底部，则向下滚动以渲染更早的历史会话
+          let scrolled = false;
+          if (candidates.length === 0 && scrollParent) {
+            const maxScroll = Math.max(0, scrollParent.scrollHeight - scrollParent.clientHeight);
+            if (scrollParent.scrollTop < maxScroll) {
+              scrollParent.scrollTop = Math.min(maxScroll, scrollParent.scrollTop + 650);
+              scrolled = true;
+            }
+          }
+
+          return {
+            candidates,
+            scrolled,
+            scrollTop: scrollParent?.scrollTop || 0
+          };
         })()
       `;
 
       const evalRes = await sendCDP('Runtime.evaluate', { expression: findCode, returnByValue: true });
-      const candidates = evalRes?.result?.value || [];
+      const scanInfo = evalRes?.result?.value || {};
+      const candidates = scanInfo.candidates || [];
 
-      if (!candidates.length) {
+      // 如果发生了向下滚动，等待虚拟列表挂载新元素
+      if (scanInfo.scrolled) {
+        await new Promise(r => setTimeout(r, 250));
+        continue;
+      }
+
+      if (candidates.length === 0) {
         break;
       }
 
-      let roundArchived = 0;
+      let passArchived = 0;
       for (const c of candidates) {
         if (!c.id) continue;
         const diskAge = getDiskAgeDays(c.id);
@@ -873,18 +898,26 @@ async function runAutoArchivePass() {
 
         const ar = await sendCDP('Runtime.evaluate', { expression: archiveCode, returnByValue: true });
         if (ar?.result?.value?.success) {
-          roundArchived++;
+          passArchived++;
           totalArchivedInPass++;
           log(`[AutoArchive] Successfully archived: ${c.id} ("${c.title}", age: ${c.timeText})`);
-          await new Promise(r => setTimeout(r, 400));
+          await new Promise(r => setTimeout(r, 350));
         }
       }
 
-      if (roundArchived === 0) {
+      if (passArchived === 0) {
         break;
       }
-      await new Promise(r => setTimeout(r, 600));
+      await new Promise(r => setTimeout(r, 350));
     }
+
+    // 扫描归档完成后，平滑将侧边栏视口滚回顶部
+    await sendCDP('Runtime.evaluate', {
+      expression: `(() => {
+        const scrollParent = document.querySelector('[data-testid="conversation-row-sidebar"]')?.closest('[class*="overflow"]');
+        if (scrollParent) scrollParent.scrollTop = 0;
+      })()`
+    });
 
     log(`[AutoArchive] Auto-archive pass completed: archived ${totalArchivedInPass} conversations older than 7 days (pinned preserved).`);
   } catch (e) {
