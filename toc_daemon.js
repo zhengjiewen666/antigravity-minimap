@@ -33,6 +33,8 @@ let ws = null;
 let reconnectTimer = null;
 let lastFlagsChecked = 0;
 let lastForksScan = 0;
+let lastAutoArchiveTime = 0;
+let isAutoArchiving = false;
 
 // 分支管理与元数据持久化
 const metaFilePath = path.join(process.env.USERPROFILE, '.gemini', 'antigravity', 'forks_meta.json');
@@ -364,6 +366,30 @@ const CSS_STYLES = `
   white-space: nowrap;
 }
 
+.ag-minimap-archive-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10.5px;
+  padding: 2px 7px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #94a3b8;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+.ag-minimap-archive-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+  color: #f1f5f9;
+  border-color: rgba(255, 255, 255, 0.28);
+}
+.ag-minimap-archive-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .ag-minimap-search-box {
   position: relative;
   width: 100%;
@@ -633,6 +659,10 @@ async function connect() {
       lastPromptsHash = '';
       lastFlagsChecked = 0;
       loopSync();
+      // 启动 5 秒后执行首轮超期自动归档检测（>7天未置顶会话）
+      setTimeout(() => {
+        runAutoArchivePass().catch(err => log('Initial auto-archive error:', err));
+      }, 5000);
     };
 
     ws.onclose = () => {
@@ -731,6 +761,137 @@ async function ensureForkFlags() {
       } catch(e) {}
     })()`
   });
+}
+
+// 计算本地磁盘上会话的最后修改时间（天数）
+function getDiskAgeDays(convId) {
+  try {
+    const transcript = path.join(
+      process.env.USERPROFILE,
+      '.gemini',
+      'antigravity',
+      'brain',
+      convId,
+      '.system_generated',
+      'logs',
+      'transcript.jsonl'
+    );
+    if (fs.existsSync(transcript)) {
+      return (Date.now() - fs.statSync(transcript).mtimeMs) / (1000 * 60 * 60 * 24);
+    }
+    const dir = path.join(process.env.USERPROFILE, '.gemini', 'antigravity', 'brain', convId);
+    if (fs.existsSync(dir)) {
+      return (Date.now() - fs.statSync(dir).mtimeMs) / (1000 * 60 * 60 * 24);
+    }
+  } catch (e) {}
+  return null;
+}
+
+// 自动归档超过 7 天的历史会话（全天候严格保护置顶内容与当前激活会话）
+async function runAutoArchivePass() {
+  if (isAutoArchiving) return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  isAutoArchiving = true;
+
+  try {
+    log('[AutoArchive] Starting auto-archive pass for conversations older than 7 days (preserving pinned)...');
+    let totalArchivedInPass = 0;
+
+    // 最多执行 3 轮扫描（侧边栏虚拟滚动，归档一批后后续项目会自动上移露出）
+    for (let round = 0; round < 3; round++) {
+      const findCode = `
+        (() => {
+          function isOlderThan7Days(str) {
+            if (!str) return false;
+            const s = str.trim().toLowerCase();
+            if (s === 'now' || s.includes('just now') || s.includes('today') || s.includes('yesterday')) return false;
+            const m = s.match(/([0-9]+)\\s*(month|mth|mo|week|wk|w|year|yr|y|day|d|hour|hr|h|min|m|sec|s)s?(?:\\s+ago)?/i);
+            if (!m) return false;
+            const val = parseInt(m[1], 10);
+            const unit = m[2].toLowerCase();
+            if (['s', 'sec', 'm', 'min', 'h', 'hr', 'hour'].includes(unit)) return false;
+            if (['d', 'day'].includes(unit)) return val > 7;
+            if (['w', 'wk', 'week', 'mo', 'mth', 'month', 'y', 'yr', 'year'].includes(unit)) return true;
+            return false;
+          }
+
+          const rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
+          const currentConvId = (window.location.pathname.split('/c/')[1] || '').split('?')[0];
+
+          return rows.map(r => {
+            const id = r.getAttribute('data-cascade-id');
+            const isPinned = r.getAttribute('data-pinned') === 'true' || !!r.querySelector('[aria-label*="Unpin" i]') || !!r.closest('[data-testid*="pinned"]');
+            const isSelected = r.getAttribute('data-selected') === 'true' || id === currentConvId;
+            const timeSpan = r.querySelector('[data-screenshot-volatile="true"]');
+            const timeText = timeSpan?.innerText || '';
+            const expired = isOlderThan7Days(timeText);
+            return {
+              id,
+              isPinned,
+              isSelected,
+              timeText,
+              expired,
+              title: (r.querySelector('span.truncate')?.innerText || r.innerText).trim().slice(0, 30)
+            };
+          }).filter(item => !item.isPinned && !item.isSelected && item.expired);
+        })()
+      `;
+
+      const evalRes = await sendCDP('Runtime.evaluate', { expression: findCode, returnByValue: true });
+      const candidates = evalRes?.result?.value || [];
+
+      if (!candidates.length) {
+        break;
+      }
+
+      let roundArchived = 0;
+      for (const c of candidates) {
+        if (!c.id) continue;
+        const diskAge = getDiskAgeDays(c.id);
+
+        // 如果本地磁盘可获取修改时间且小于 7 天，严格保护不归档
+        if (diskAge !== null && diskAge < 7) {
+          log(`[AutoArchive] Skip ${c.id} ("${c.title}"): disk age ${diskAge.toFixed(1)}d < 7d`);
+          continue;
+        }
+
+        const archiveCode = `
+          (() => {
+            const row = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'))
+              .find(r => r.getAttribute('data-cascade-id') === ${JSON.stringify(c.id)});
+            if (!row) return { success: false, reason: 'row_not_found' };
+            // 归档前最后严格防线：置顶或当前正在使用的绝对不能归档
+            if (row.getAttribute('data-pinned') === 'true' || row.querySelector('[aria-label*="Unpin" i]') || row.getAttribute('data-selected') === 'true') {
+              return { success: false, reason: 'pinned_or_active' };
+            }
+            const btn = row.querySelector('[data-testid="conversation-archive-button"]');
+            if (!btn) return { success: false, reason: 'no_btn' };
+            btn.click();
+            return { success: true };
+          })()
+        `;
+
+        const ar = await sendCDP('Runtime.evaluate', { expression: archiveCode, returnByValue: true });
+        if (ar?.result?.value?.success) {
+          roundArchived++;
+          totalArchivedInPass++;
+          log(`[AutoArchive] Successfully archived: ${c.id} ("${c.title}", age: ${c.timeText})`);
+          await new Promise(r => setTimeout(r, 400));
+        }
+      }
+
+      if (roundArchived === 0) {
+        break;
+      }
+      await new Promise(r => setTimeout(r, 600));
+    }
+
+    log(`[AutoArchive] Auto-archive pass completed: archived ${totalArchivedInPass} conversations older than 7 days (pinned preserved).`);
+  } catch (e) {
+    log('[AutoArchive] Error during pass:', e.message);
+  } finally {
+    isAutoArchiving = false;
+  }
 }
 
 // 确保浏览器全局环境与侧边栏徽标常驻运行
@@ -908,7 +1069,7 @@ async function loopSync() {
     await ensureClientEnvironment();
 
     const res = await sendCDP('Runtime.evaluate', {
-      expression: '(() => ({ pathname: window.location.pathname, hasRoot: !!document.getElementById("ag-minimap-root"), datasetConv: document.getElementById("ag-minimap-root")?.dataset?.convId, pendingFork: window.localStorage.getItem("ag_pending_fork") }))()',
+      expression: '(() => ({ pathname: window.location.pathname, hasRoot: !!document.getElementById("ag-minimap-root"), datasetConv: document.getElementById("ag-minimap-root")?.dataset?.convId, pendingFork: window.localStorage.getItem("ag_pending_fork"), pendingArchive: window.localStorage.getItem("ag_trigger_archive") }))()',
       returnByValue: true
     });
     const info = res?.result?.value || {};
@@ -916,6 +1077,20 @@ async function loopSync() {
     const hasRoot = !!info.hasRoot;
     const datasetConv = info.datasetConv || null;
     const convId = (pathname.split('/c/')[1] || '').split('?')[0] || null;
+
+    // 检查是否有前端手动触发的超期归档请求
+    if (info.pendingArchive) {
+      try {
+        await sendCDP('Runtime.evaluate', { expression: 'window.localStorage.removeItem("ag_trigger_archive")' });
+        runAutoArchivePass().catch(err => log('Triggered auto-archive error:', err));
+      } catch(e) {}
+    }
+
+    // 定期执行超过7天旧会话自动归档（每 15 分钟扫描一次，置顶内容全天候保护）
+    if (Date.now() - lastAutoArchiveTime > 15 * 60 * 1000) {
+      lastAutoArchiveTime = Date.now();
+      runAutoArchivePass().catch(err => log('Periodic auto-archive error:', err));
+    }
 
     // 检查是否有刚点击分叉按钮产生的待定分支
     if (info.pendingFork && convId) {
@@ -1052,10 +1227,12 @@ async function renderCleanMinimap(convId, prompts, forkInfo, parentInfo) {
       const card = document.createElement('div');
       card.id = 'ag-minimap-card';
 
+      const archiveBtnHtml = '<button class="ag-minimap-archive-btn" id="ag-btn-auto-archive" title="自动归档超过7天的旧会话 (置顶内容受保护保留)">📦 归档>7d</button>';
       let headerTitleHtml = '<div class="ag-minimap-header-left">' +
         '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h10M4 18h14"/></svg>' +
         '<span class="ag-minimap-header-title">提问导航与分支管理</span></div>';
       let headerBadgeHtml = '<div class="ag-minimap-header-actions">' +
+        archiveBtnHtml +
         '<span class="ag-minimap-card-badge">' + promptsData.length + ' 轮提问</span>' +
         '<button class="ag-minimap-close-btn" title="收起目录">✕</button></div>';
 
@@ -1064,6 +1241,7 @@ async function renderCleanMinimap(convId, prompts, forkInfo, parentInfo) {
           '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#c084fc" stroke-width="2.5"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="9" r="3"/><path d="M6 9v6"/><path d="M18 9c0 3-3 6-12 6"/></svg>' +
           '<span class="ag-minimap-header-title" style="color:#c084fc">分支 (#' + currentForkInfo.forkRound + ' 起)</span></div>';
         headerBadgeHtml = '<div class="ag-minimap-header-actions">' +
+          archiveBtnHtml +
           '<span class="ag-minimap-card-badge" style="background:rgba(168,85,247,0.18);color:#c084fc;border:1px solid rgba(168,85,247,0.4)">' +
           promptsData.length + ' 轮</span>' +
           '<button class="ag-minimap-close-btn" title="收起目录">✕</button></div>';
@@ -1071,6 +1249,7 @@ async function renderCleanMinimap(convId, prompts, forkInfo, parentInfo) {
         headerTitleHtml = '<div class="ag-minimap-header-left">' +
           '<span class="ag-minimap-header-title" style="color:#60a5fa">📌 主干 (' + currentParentInfo.forkCount + ' 个分支)</span></div>';
         headerBadgeHtml = '<div class="ag-minimap-header-actions">' +
+          archiveBtnHtml +
           '<span class="ag-minimap-card-badge" style="background:rgba(59,130,246,0.18);color:#60a5fa;border:1px solid rgba(59,130,246,0.4)">' +
           promptsData.length + ' 轮</span>' +
           '<button class="ag-minimap-close-btn" title="收起目录">✕</button></div>';
@@ -1236,6 +1415,24 @@ async function renderCleanMinimap(convId, prompts, forkInfo, parentInfo) {
             if (searchInput && promptsData.length > 8) searchInput.focus();
           }, 50);
         }
+      }
+
+      // 手动触发超期自动归档按钮
+      const archiveBtn = card.querySelector('#ag-btn-auto-archive');
+      if (archiveBtn) {
+        archiveBtn.onclick = (e) => {
+          e.stopPropagation();
+          archiveBtn.innerText = '⏳ 归档中...';
+          archiveBtn.disabled = true;
+          window.localStorage.setItem('ag_trigger_archive', Date.now());
+          setTimeout(() => {
+            archiveBtn.innerText = '✓ 归档完毕';
+            setTimeout(() => {
+              archiveBtn.innerText = '📦 归档>7d';
+              archiveBtn.disabled = false;
+            }, 3000);
+          }, 1600);
+        };
       }
 
       // 卡片关闭按钮
