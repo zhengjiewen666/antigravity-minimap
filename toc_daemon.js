@@ -813,7 +813,7 @@ async function runAutoArchivePass() {
             const val = parseInt(m[1], 10);
             const unit = m[2].toLowerCase();
             if (['s', 'sec', 'm', 'min', 'h', 'hr', 'hour'].includes(unit)) return false;
-            if (['d', 'day'].includes(unit)) return val > 7;
+            if (['d', 'day'].includes(unit)) return val >= 7;
             if (['w', 'wk', 'week', 'mo', 'mth', 'month', 'y', 'yr', 'year'].includes(unit)) return true;
             return false;
           }
@@ -874,9 +874,9 @@ async function runAutoArchivePass() {
         if (!c.id) continue;
         const diskAge = getDiskAgeDays(c.id);
 
-        // 如果本地磁盘可获取修改时间且小于 7 天，严格保护不归档
-        if (diskAge !== null && diskAge < 7) {
-          log(`[AutoArchive] Skip ${c.id} ("${c.title}"): disk age ${diskAge.toFixed(1)}d < 7d`);
+        // 如果本地磁盘可获取修改时间且小于 6.8 天，严格保护不归档
+        if (diskAge !== null && diskAge < 6.8) {
+          log(`[AutoArchive] Skip ${c.id} ("${c.title}"): disk age ${diskAge.toFixed(1)}d < 6.8d`);
           continue;
         }
 
@@ -1119,8 +1119,8 @@ async function loopSync() {
       } catch(e) {}
     }
 
-    // 定期执行超过7天旧会话自动归档（每 15 分钟扫描一次，置顶内容全天候保护）
-    if (Date.now() - lastAutoArchiveTime > 15 * 60 * 1000) {
+    // 定期执行超过7天旧会话自动归档（每 5 分钟扫描一次，置顶内容全天候保护）
+    if (Date.now() - lastAutoArchiveTime > 5 * 60 * 1000) {
       lastAutoArchiveTime = Date.now();
       runAutoArchivePass().catch(err => log('Periodic auto-archive error:', err));
     }
