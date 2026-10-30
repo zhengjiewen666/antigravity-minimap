@@ -27,11 +27,8 @@ copy /y "%~dp0toc_daemon.js" "%TARGET_DIR%\toc_daemon.js" >nul
 copy /y "%~dp0watchdog.vbs" "%TARGET_DIR%\watchdog.vbs" >nul
 copy /y "%~dp0guard.js" "%TARGET_DIR%\guard.js" >nul
 
-echo [2/4] 正在配置 Windows 开机与登录静默自启项...
-powershell -NoProfile -Command "$vbs = 'On Error Resume Next`nSet ws = CreateObject(\"WScript.Shell\")`nup = ws.ExpandEnvironmentStrings(\"%USERPROFILE%\")`nnodeExe = \"C:\Program Files\nodejs\node.exe\"`ndaemonJs = up & \"\.gemini\antigravity\toc_daemon.js\"`nws.Run \"\"\"\" & nodeExe & \"\"\" \"\"\" & daemonJs & \"\"\"\", 0, False'; [System.IO.File]::WriteAllText($env:VBS_TARGET, $vbs, [System.Text.Encoding]::ASCII)"
-
-rem 写入注册表用户自启 Run 项
-powershell -NoProfile -Command "Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'AntigravityMinimap' -Value ('wscript.exe \"' + $env:VBS_TARGET + '\"')"
+echo [2/4] 正在配置 Windows 开机与登录静默自启项 (UTF-16LE 兼容中文路径)...
+node "%~dp0setup_autostart.js"
 
 echo [3/4] 正在配置 Antigravity 全局生命周期自愈钩子 (hooks.json)...
 node -e "
