@@ -795,131 +795,96 @@ async function runAutoArchivePass() {
 
   try {
     log('[AutoArchive] Starting auto-archive pass for conversations older than 7 days (preserving pinned)...');
-    let totalArchivedInPass = 0;
 
-    // 全量虚拟滚动巡检归档：适配侧边栏虚拟列表，动态滚屏直至扫描并归档完毕全部超期项
-    for (let pass = 0; pass < 35; pass++) {
-      const findCode = `
-        (() => {
-          const rows = document.querySelectorAll('[data-testid="conversation-row-sidebar"]');
-          const scrollParent = rows[0]?.closest('[class*="overflow"]');
+    const evalCode = `
+      (async () => {
+        try {
+          const root = document.querySelector('#root') || document.body.firstElementChild;
+          if (!root) return { error: 'no_root' };
+          const key = Object.keys(root).find(k => k.startsWith('__reactFiber') || k.startsWith('__reactContainer'));
+          let fiber = root ? root[key] : null;
 
-          function isOlderThan7Days(str) {
-            if (!str) return false;
-            const s = str.trim().toLowerCase();
-            if (s === 'now' || s.includes('just now') || s.includes('today') || s.includes('yesterday')) return false;
-            const m = s.match(/([0-9]+)\\s*(month|mth|mo|week|wk|w|year|yr|y|day|d|hour|hr|h|min|m|sec|s)s?(?:\\s+ago)?/i);
-            if (!m) return false;
-            const val = parseInt(m[1], 10);
-            const unit = m[2].toLowerCase();
-            if (['s', 'sec', 'm', 'min', 'h', 'hr', 'hour'].includes(unit)) return false;
-            if (['d', 'day'].includes(unit)) return val >= 7;
-            if (['w', 'wk', 'week', 'mo', 'mth', 'month', 'y', 'yr', 'year'].includes(unit)) return true;
-            return false;
+          let store = null;
+          let agentService = null;
+
+          function scan(f, depth) {
+            if (!f || depth > 100) return;
+            if (f.memoizedProps) {
+              if (!store && f.memoizedProps.store) store = f.memoizedProps.store;
+              if (!agentService && f.memoizedProps.agentService) agentService = f.memoizedProps.agentService;
+            }
+            if (store && agentService) return;
+            scan(f.child, depth + 1);
+            if (store && agentService) return;
+            scan(f.sibling, depth + 1);
           }
+          if (fiber) scan(fiber, 0);
 
+          if (!store || !agentService) return { error: 'services_not_found' };
+
+          const state = store.getState();
+          const summaries = state?.trajectorySummaries?.summaries || {};
+          const pinnedIds = new Set(Object.keys(state?.trajectorySummaries?.indexes?.pinned || {}));
           const currentConvId = (window.location.pathname.split('/c/')[1] || '').split('?')[0];
 
-          const candidates = Array.from(rows).map(r => {
-            const id = r.getAttribute('data-cascade-id');
-            const isPinned = r.getAttribute('data-pinned') === 'true' || !!r.querySelector('[aria-label*="Unpin" i]') || !!r.closest('[data-testid*="pinned"]');
-            const isSelected = r.getAttribute('data-selected') === 'true' || id === currentConvId;
-            const timeSpan = r.querySelector('[data-screenshot-volatile="true"]');
-            const timeText = timeSpan?.innerText || '';
-            const expired = isOlderThan7Days(timeText);
-            return {
-              id,
-              isPinned,
-              isSelected,
-              timeText,
-              expired,
-              title: (r.querySelector('span.truncate')?.innerText || r.innerText).trim().slice(0, 30)
-            };
-          }).filter(item => !item.isPinned && !item.isSelected && item.expired);
+          const now = Date.now();
+          const ms7d = 7 * 24 * 60 * 60 * 1000;
+          const candidates = [];
 
-          // 若当前可见区域没有超期项，且尚未滚动到底部，则向下滚动以渲染更早的历史会话
-          let scrolled = false;
-          if (candidates.length === 0 && scrollParent) {
-            const maxScroll = Math.max(0, scrollParent.scrollHeight - scrollParent.clientHeight);
-            if (scrollParent.scrollTop < maxScroll) {
-              scrollParent.scrollTop = Math.min(maxScroll, scrollParent.scrollTop + 650);
-              scrolled = true;
+          for (const [id, s] of Object.entries(summaries)) {
+            if (!id || pinnedIds.has(id) || id === currentConvId || s.annotations?.archived === true) continue;
+
+            let t = null;
+            if (s.lastModifiedTime && s.lastModifiedTime.seconds) t = Number(s.lastModifiedTime.seconds) * 1000;
+            else if (s.lastUserInputTime && s.lastUserInputTime.seconds) t = Number(s.lastUserInputTime.seconds) * 1000;
+            else if (s.createdTime && s.createdTime.seconds) t = Number(s.createdTime.seconds) * 1000;
+
+            if (t && (now - t) >= ms7d) {
+              candidates.push({
+                id,
+                title: (s.summary || 'Untitled').slice(0, 30),
+                ageDays: Number(((now - t) / (24 * 60 * 60 * 1000)).toFixed(1))
+              });
             }
+          }
+
+          let archivedCount = 0;
+          for (const item of candidates) {
+            try {
+              await agentService.updateConversationAnnotations([item.id], { archived: true }, true);
+              archivedCount++;
+            } catch(e) {}
           }
 
           return {
-            candidates,
-            scrolled,
-            scrollTop: scrollParent?.scrollTop || 0
+            success: true,
+            totalFound: candidates.length,
+            archivedCount,
+            items: candidates.map(c => ({ id: c.id, title: c.title, ageDays: c.ageDays }))
           };
-        })()
-      `;
-
-      const evalRes = await sendCDP('Runtime.evaluate', { expression: findCode, returnByValue: true });
-      const scanInfo = evalRes?.result?.value || {};
-      const candidates = scanInfo.candidates || [];
-
-      // 如果发生了向下滚动，等待虚拟列表挂载新元素
-      if (scanInfo.scrolled) {
-        await new Promise(r => setTimeout(r, 250));
-        continue;
-      }
-
-      if (candidates.length === 0) {
-        break;
-      }
-
-      let passArchived = 0;
-      for (const c of candidates) {
-        if (!c.id) continue;
-        const diskAge = getDiskAgeDays(c.id);
-
-        // 如果本地磁盘可获取修改时间且小于 6.8 天，严格保护不归档
-        if (diskAge !== null && diskAge < 6.8) {
-          log(`[AutoArchive] Skip ${c.id} ("${c.title}"): disk age ${diskAge.toFixed(1)}d < 6.8d`);
-          continue;
+        } catch(e) {
+          return { error: e.message };
         }
+      })()
+    `;
 
-        const archiveCode = `
-          (() => {
-            const row = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'))
-              .find(r => r.getAttribute('data-cascade-id') === ${JSON.stringify(c.id)});
-            if (!row) return { success: false, reason: 'row_not_found' };
-            // 归档前最后严格防线：置顶或当前正在使用的绝对不能归档
-            if (row.getAttribute('data-pinned') === 'true' || row.querySelector('[aria-label*="Unpin" i]') || row.getAttribute('data-selected') === 'true') {
-              return { success: false, reason: 'pinned_or_active' };
-            }
-            const btn = row.querySelector('[data-testid="conversation-archive-button"]');
-            if (!btn) return { success: false, reason: 'no_btn' };
-            btn.click();
-            return { success: true };
-          })()
-        `;
-
-        const ar = await sendCDP('Runtime.evaluate', { expression: archiveCode, returnByValue: true });
-        if (ar?.result?.value?.success) {
-          passArchived++;
-          totalArchivedInPass++;
-          log(`[AutoArchive] Successfully archived: ${c.id} ("${c.title}", age: ${c.timeText})`);
-          await new Promise(r => setTimeout(r, 350));
-        }
-      }
-
-      if (passArchived === 0) {
-        break;
-      }
-      await new Promise(r => setTimeout(r, 350));
-    }
-
-    // 扫描归档完成后，平滑将侧边栏视口滚回顶部
-    await sendCDP('Runtime.evaluate', {
-      expression: `(() => {
-        const scrollParent = document.querySelector('[data-testid="conversation-row-sidebar"]')?.closest('[class*="overflow"]');
-        if (scrollParent) scrollParent.scrollTop = 0;
-      })()`
+    const res = await sendCDP('Runtime.evaluate', {
+      expression: evalCode,
+      returnByValue: true,
+      awaitPromise: true
     });
 
-    log(`[AutoArchive] Auto-archive pass completed: archived ${totalArchivedInPass} conversations older than 7 days (pinned preserved).`);
+    const info = res?.result?.value;
+    if (info && info.success) {
+      if (info.items && info.items.length > 0) {
+        for (const item of info.items) {
+          log(`[AutoArchive] Successfully archived: ${item.id} ("${item.title}", age: ${item.ageDays}d)`);
+        }
+      }
+      log(`[AutoArchive] Auto-archive pass completed: archived ${info.archivedCount} conversations older than 7 days (pinned preserved).`);
+    } else {
+      log(`[AutoArchive] Pass completed with notice: ${info?.error || 'no_action'}`);
+    }
   } catch (e) {
     log('[AutoArchive] Error during pass:', e.message);
   } finally {
