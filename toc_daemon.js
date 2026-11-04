@@ -626,6 +626,15 @@ const CSS_STYLES = `
   border-color: rgba(59, 130, 246, 0.65) !important;
   box-shadow: 0 0 8px rgba(59, 130, 246, 0.35) !important;
 }
+
+/* 侧边栏行悬停时优雅隐藏分支徽标，让位给原生操作按钮（重命名/删除/置顶/归档），杜绝视觉重叠混淆 */
+[data-testid="conversation-row-sidebar"]:hover .ag-fork-badge,
+[data-testid="conversation-row-sidebar"]:hover .ag-root-badge,
+.agy-sidebar-row:hover .ag-fork-badge,
+.agy-sidebar-row:hover .ag-root-badge {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
 `;
 
 const FORK_SVG = `<svg viewBox="0 -960 960 960" width="12" height="12" fill="currentColor"><path d="M530-140V-290.77q-18.77-68.62-66-101.81T360.85-425.77q-16.39,0-33.15,1.88t-32.77,4.65l73.39,74l-42.15,42.15L180-449.23L326.15-595.38l42.15,42.15l-73.39,74q14.77-2.77 30.54-4.15t32.92-1.38q49.39,0 93.96,18.69T530-407.54V-704.69l-74,74l-42.15-42.77L560-819.61L706.15-673.46L664-631.31l-74-73.39V-140H530Z"/></svg> <span>分叉</span>`;
@@ -754,7 +763,8 @@ async function ensureForkFlags() {
           window.localStorage.setItem('jetski.developer.customFlagOverrides', val);
           window.dispatchEvent(new StorageEvent('storage', {
             key: 'jetski.developer.customFlagOverrides',
-            newValue: val
+            newValue: val,
+            storageArea: window.localStorage
           }));
           window.__agFlagsEventDispatched = true;
         }
@@ -1004,7 +1014,8 @@ async function ensureClientEnvironment() {
               window.localStorage.setItem('jetski.developer.customFlagOverrides', val);
               window.dispatchEvent(new StorageEvent('storage', {
                 key: 'jetski.developer.customFlagOverrides',
-                newValue: val
+                newValue: val,
+                storageArea: window.localStorage
               }));
               window.__agFlagsEventDispatched = true;
             }
@@ -1688,14 +1699,23 @@ async function renderCleanMinimap(convId, prompts, forkInfo, parentInfo) {
 
           await jump(e);
           setTimeout(() => {
-            const toolbars = Array.from(document.querySelectorAll('[data-testid="cascade-system-message-toolbar"]'));
-            const tb = toolbars[idx] || toolbars[toolbars.length - 1];
-            if (tb) {
-              const b = tb.querySelector('[aria-label="Fork Conversation"]');
-              if (b) {
-                b.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
-                b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+            let b = null;
+            const targetNode = findTarget(idx);
+            if (targetNode) {
+              let sibling = targetNode.nextElementSibling;
+              while (sibling && !b) {
+                b = sibling.querySelector?.('[aria-label="Fork Conversation"]');
+                if (b) break;
+                sibling = sibling.nextElementSibling;
               }
+            }
+            if (!b) {
+              const forkBtns = Array.from(document.querySelectorAll('[aria-label="Fork Conversation"]'));
+              b = forkBtns[idx] || forkBtns[forkBtns.length - 1] || document.querySelector('[aria-label="Fork Conversation"]');
+            }
+            if (b) {
+              b.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+              b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
             }
           }, 250);
         };

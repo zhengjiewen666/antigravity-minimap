@@ -27,37 +27,17 @@ copy /y "%~dp0toc_daemon.js" "%TARGET_DIR%\toc_daemon.js" >nul
 copy /y "%~dp0watchdog.vbs" "%TARGET_DIR%\watchdog.vbs" >nul
 copy /y "%~dp0guard.js" "%TARGET_DIR%\guard.js" >nul
 
-echo [2/4] 正在配置 Windows 开机与登录静默自启项 (UTF-16LE 兼容中文路径)...
+echo [2/4] 正在配置 Windows 开机与登录静默自启项 (纯 ASCII 路径兼容)...
 node "%~dp0setup_autostart.js"
 
-echo [3/4] 正在配置 Antigravity 全局生命周期自愈钩子 (hooks.json)...
-node -e "
-const fs = require('fs');
-const path = require('path');
-const configDir = path.join(process.env.USERPROFILE, '.gemini', 'config');
-const hooksPath = path.join(configDir, 'hooks.json');
-let hooks = {};
-try { if (fs.existsSync(hooksPath)) hooks = JSON.parse(fs.readFileSync(hooksPath, 'utf8')); } catch(e) {}
-hooks['minimap-guard'] = {
-  PreInvocation: [
-    {
-      type: 'command',
-      command: 'node \"' + path.join(process.env.USERPROFILE, '.gemini', 'antigravity', 'guard.js').replace(/\\/g, '/') + '\"'
-    }
-  ]
-};
-fs.writeFileSync(hooksPath, JSON.stringify(hooks, null, 2), 'utf8');
-"
-
-echo [4/4] 正在启动后台守护服务...
-wscript.exe "%VBS_TARGET%"
+echo [3/4] 正在启动后台守护服务...
+wscript.exe "%~dp0run_daemon.vbs"
 
 echo.
 echo ========================================================
 echo [✔] 安装与多重自启配置成功！
 echo     1. Windows 开机/登录自启项已配置 (Startup + Registry Run)
-echo     2. Antigravity 运行自愈守卫已激活 (hooks.json)
+echo     2. Antigravity 运行自愈守卫已激活 (hooks.json SessionStart + PreInvocation)
 echo     3. 悬浮球提问导航与分支管理服务已在后台运行！
 echo ========================================================
-echo.
 pause
