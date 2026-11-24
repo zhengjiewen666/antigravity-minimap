@@ -1078,13 +1078,11 @@ async function loopSync() {
     await ensureClientEnvironment();
 
     const res = await sendCDP('Runtime.evaluate', {
-      expression: '(() => ({ pathname: window.location.pathname, hasRoot: !!document.getElementById("ag-minimap-root"), datasetConv: document.getElementById("ag-minimap-root")?.dataset?.convId, pendingFork: window.localStorage.getItem("ag_pending_fork"), pendingArchive: window.localStorage.getItem("ag_trigger_archive") }))()',
+      expression: '(() => { const r = document.getElementById("ag-minimap-root"); if (r) r.remove(); return { pathname: window.location.pathname, pendingFork: window.localStorage.getItem("ag_pending_fork"), pendingArchive: window.localStorage.getItem("ag_trigger_archive") }; })()',
       returnByValue: true
     });
     const info = res?.result?.value || {};
     const pathname = info.pathname || '';
-    const hasRoot = !!info.hasRoot;
-    const datasetConv = info.datasetConv || null;
     const convId = (pathname.split('/c/')[1] || '').split('?')[0] || null;
 
     // 检查是否有前端手动触发的超期归档请求
@@ -1129,56 +1127,8 @@ async function loopSync() {
       } catch(e) {}
     }
 
-    if (convId) {
-      const transcriptPath = path.join(
-        process.env.USERPROFILE,
-        '.gemini',
-        'antigravity',
-        'brain',
-        convId,
-        '.system_generated',
-        'logs',
-        'transcript.jsonl'
-      );
-
-      const allPrompts = [];
-      if (fs.existsSync(transcriptPath)) {
-        const lines = fs.readFileSync(transcriptPath, 'utf-8').split('\n').filter(Boolean);
-        for (const line of lines) {
-          try {
-            const obj = JSON.parse(line);
-            if (obj.source === 'USER_EXPLICIT' && obj.type === 'USER_INPUT') {
-              let content = obj.content || '';
-              const matchReq = content.match(/<USER_REQUEST>([\s\S]*?)<\/USER_REQUEST>/);
-              if (matchReq) content = matchReq[1].trim();
-              if (content) {
-                allPrompts.push({
-                  text: content
-                });
-              }
-            }
-          } catch (e) {}
-        }
-      }
-
-      const forkInfo = cachedForks[convId] || null;
-      const parentInfo = cachedParents[convId] || null;
-      const hash = convId + '_' + JSON.stringify(allPrompts.map(p => p.text)) + '_' + (forkInfo ? forkInfo.forkRound : '0');
-
-      if (convId !== lastConvId || hash !== lastPromptsHash || !hasRoot || datasetConv !== convId) {
-        lastConvId = convId;
-        lastPromptsHash = hash;
-        log(`Rendered ${allPrompts.length} prompts & fork tools for conv: ${convId}`);
-        await renderCleanMinimap(convId, allPrompts, forkInfo, parentInfo);
-      }
-    } else {
-      if (lastConvId !== null) {
-        lastConvId = null;
-        lastPromptsHash = '';
-        await sendCDP('Runtime.evaluate', {
-          expression: `(() => { const r = document.getElementById('ag-minimap-root'); if (r) r.style.display = 'none'; })()`
-        });
-      }
+    if (convId !== lastConvId) {
+      lastConvId = convId;
     }
   } catch (e) {
     log('loopSync error:', e.message);
