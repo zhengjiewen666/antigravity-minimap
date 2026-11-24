@@ -766,6 +766,27 @@ async function ensureForkFlags() {
             newValue: val,
             storageArea: window.localStorage
           }));
+          // Antigravity 新版改用 core.storageService (usePersistentState) 监听特性开关
+          try {
+            const rootEl = document.getElementById('root');
+            const fKey = rootEl && Object.keys(rootEl).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactContainer$'));
+            if (fKey) {
+              const q = [rootEl[fKey]];
+              let n = 0;
+              while (q.length > 0 && n < 15000) {
+                const c = q.shift();
+                n++;
+                if (!c) continue;
+                const ss = c.memoizedProps?.value?.core?.storageService || c.memoizedProps?.value?.storageService;
+                if (ss && typeof ss.set === 'function') {
+                  ss.set('jetski.developer.customFlagOverrides', val);
+                  break;
+                }
+                if (c.child) q.push(c.child);
+                if (c.sibling) q.push(c.sibling);
+              }
+            }
+          } catch(e2) {}
           window.__agFlagsEventDispatched = true;
         }
       } catch(e) {}
