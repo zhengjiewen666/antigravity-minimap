@@ -778,8 +778,8 @@ async function ensureForkFlags() {
                 n++;
                 if (!c) continue;
                 const ss = c.memoizedProps?.value?.core?.storageService || c.memoizedProps?.value?.storageService;
-                if (ss && typeof ss.set === 'function') {
-                  ss.set('jetski.developer.customFlagOverrides', val);
+                if (ss && typeof ss.store === 'function') {
+                  ss.store('jetski.developer.customFlagOverrides', val);
                   break;
                 }
                 if (c.child) q.push(c.child);
